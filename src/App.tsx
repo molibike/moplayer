@@ -1,13 +1,23 @@
-import { useState } from 'react';
-import VideoPlayer from './components/VideoPlayer';
-import PlayerControls from './components/PlayerControls';
+import { useState, useRef, useEffect } from 'react';
+import MenuBar from './components/MenuBar';
+import ControlBar from './components/ControlBar';
+import IntegratedPlayer from './components/IntegratedPlayer';
 import FileDropZone from './components/FileDropZone';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 interface PlayerState {
   isPlaying: boolean;
   currentTime: number;
   duration: number;
   volume: number;
+  muted: boolean;
+}
+
+interface PlaylistItem {
+  id: string;
+  name: string;
+  url: string;
+  file: File;
 }
 
 function App() {
@@ -17,20 +27,191 @@ function App() {
     currentTime: 0,
     duration: 0,
     volume: 1,
+    muted: false,
   });
+  const [playlist, setPlaylist] = useState<PlaylistItem[]>([]);
+  const [currentPlaylistIndex, setCurrentPlaylistIndex] = useState<number>(-1);
   const [error, setError] = useState<string>('');
+  const [isDragging, setIsDragging] = useState(false);
+
+  // 播放器方法引用
+  const playPauseRef = useRef<(() => void) | null>(null);
+  const volumeUpRef = useRef<(() => void) | null>(null);
+  const volumeDownRef = useRef<(() => void) | null>(null);
+  const muteRef = useRef<(() => void) | null>(null);
+  const seekForwardRef = useRef<(() => void) | null>(null);
+  const seekBackwardRef = useRef<(() => void) | null>(null);
 
   const handleFileSelect = async (file: File) => {
     try {
       setError('');
       const url = URL.createObjectURL(file);
       setVideoSrc(url);
+      
+      // 添加到播放列表
+      const newItem: PlaylistItem = {
+        id: Date.now().toString(),
+        name: file.name,
+        url: url,
+        file: file
+      };
+      
+      setPlaylist(prev => {
+        const newPlaylist = [...prev, newItem];
+        setCurrentPlaylistIndex(newPlaylist.length - 1); // 设置为新添加的文件索引
+        return newPlaylist;
+      });
+      setPlayerState(prev => ({ ...prev, isPlaying: false })); // 让IntegratedPlayer自动处理播放
     } catch (err) {
       setError('文件加载失败: ' + (err as Error).message);
     }
   };
 
-  const handleFileSelectClick = () => {
+  // 添加多个文件到播放列表
+  const handleFilesAdd = (files: File[]) => {
+    if (files.length > 0) {
+      // 过滤重复文件（基于文件名和大小）
+      const existingFiles = new Set(
+        playlist.map(item => `${item.name}_${item.file.size}`)
+      );
+      
+      const uniqueFiles = files.filter(file => 
+        !existingFiles.has(`${file.name}_${file.size}`)
+      );
+      
+      if (uniqueFiles.length === 0) {
+        // 所有文件都是重复的，不添加
+        return;
+      }
+      
+      // 创建新的播放列表项
+      const newPlaylist = uniqueFiles.map(file => {
+        const url = URL.createObjectURL(file);
+        return {
+          id: Date.now().toString() + Math.random(),
+          name: file.name,
+          url: url,
+          file: file
+        };
+      });
+      
+      // 仅添加到播放列表，不立即播放
+      setPlaylist(prev => [...prev, ...newPlaylist]);
+    }
+  };
+
+  // 选择文件并立即播放（用于控制栏的文件选择）
+  const handleFileSelectAndPlay = (files: File[]) => {
+    if (files.length > 0) {
+      const file = files[0]; // 只处理第一个文件
+      
+      // 检查文件是否已在播放列表中
+      const existingIndex = playlist.findIndex(item => 
+        item.name === file.name && item.file.size === file.size
+      );
+      
+      if (existingIndex >= 0) {
+        // 文件已存在，直接播放
+        handlePlaylistItemClick(existingIndex);
+      } else {
+        // 文件不存在，添加到播放列表并播放
+        const url = URL.createObjectURL(file);
+        const newItem = {
+          id: Date.now().toString() + Math.random(),
+          name: file.name,
+          url: url,
+          file: file
+        };
+        
+        const newPlaylist = [...playlist, newItem];
+        setPlaylist(newPlaylist);
+        
+        // 立即播放新添加的文件
+        setVideoSrc(url);
+        setCurrentPlaylistIndex(newPlaylist.length - 1);
+        setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
+      }
+    }
+  };
+
+  // 播放列表项点击
+  const handlePlaylistItemClick = (index: number) => {
+    if (index >= 0 && index < playlist.length) {
+      const item = playlist[index];
+      setVideoSrc(item.url);
+      setCurrentPlaylistIndex(index);
+      // 重置播放状态，让IntegratedPlayer自动处理播放
+      setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
+    }
+  };
+
+  // 删除播放列表项
+  const handlePlaylistItemRemove = (index: number) => {
+    if (index === currentPlaylistIndex) {
+      // 如果删除的是当前播放项，停止播放
+      setVideoSrc('');
+      setCurrentPlaylistIndex(-1);
+    }
+    
+    setPlaylist(prev => prev.filter((_, i) => i !== index));
+    
+    // 调整当前索引
+    if (index < currentPlaylistIndex) {
+      setCurrentPlaylistIndex(prev => prev - 1);
+    } else if (index === currentPlaylistIndex) {
+      setCurrentPlaylistIndex(-1);
+    }
+  };
+
+  // 移动播放列表项
+  const handlePlaylistItemMove = (fromIndex: number, toIndex: number) => {
+    if (fromIndex < 0 || fromIndex >= playlist.length || toIndex < 0 || toIndex >= playlist.length) {
+      return;
+    }
+    
+    const newPlaylist = [...playlist];
+    const [movedItem] = newPlaylist.splice(fromIndex, 1);
+    newPlaylist.splice(toIndex, 0, movedItem);
+    setPlaylist(newPlaylist);
+    
+    // 调整当前索引
+    if (fromIndex === currentPlaylistIndex) {
+      setCurrentPlaylistIndex(toIndex);
+    } else if (fromIndex < currentPlaylistIndex && toIndex >= currentPlaylistIndex) {
+      setCurrentPlaylistIndex(prev => prev - 1);
+    } else if (fromIndex > currentPlaylistIndex && toIndex <= currentPlaylistIndex) {
+      setCurrentPlaylistIndex(prev => prev + 1);
+    }
+  };
+
+  // 上一曲
+  const handlePrevious = () => {
+    if (playlist.length === 0) return;
+    
+    let newIndex = currentPlaylistIndex - 1;
+    if (newIndex < 0) newIndex = playlist.length - 1; // 循环播放
+    
+    handlePlaylistItemClick(newIndex);
+  };
+
+  // 下一曲
+  const handleNext = () => {
+    if (playlist.length === 0) return;
+    
+    let newIndex = currentPlaylistIndex + 1;
+    if (newIndex >= playlist.length) newIndex = 0; // 循环播放
+    
+    handlePlaylistItemClick(newIndex);
+  };
+
+  // 停止播放
+  const handleStop = () => {
+    setVideoSrc('');
+    setPlayerState(prev => ({ ...prev, isPlaying: false }));
+    setCurrentPlaylistIndex(-1);
+  };
+
+  const handleOpenFile = () => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'video/*,audio/*';
@@ -47,71 +228,253 @@ function App() {
     setPlayerState(prev => ({ ...prev, ...newState }));
   };
 
+  // 窗口拖拽功能 - 全窗口拖拽，类似PotPlayer，通过按键释放时间区分单击和拖拽
+  useEffect(() => {
+    const startWindowDrag = async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const appWindow = getCurrentWindow();
+        await appWindow.startDragging();
+      } catch (error) {
+        console.error('拖拽失败:', error);
+      }
+    };
+
+    let mouseDownTime = 0;
+    let dragStarted = false;
+    let startX = 0;
+    let startY = 0;
+    const DRAG_TIME_THRESHOLD = 150; // 按键时间阈值（毫秒），超过此时间认为是拖拽意图
+    const DRAG_DISTANCE_THRESHOLD = 5; // 移动距离阈值，避免误触
+
+    const handleMouseDown = (e: MouseEvent) => {
+      // 只处理左键
+      if (e.button !== 0) return;
+      
+      const target = e.target as HTMLElement;
+      
+      // 排除交互元素，但允许视频区域拖拽
+      if (target.closest('button') || 
+          target.closest('input') || 
+          target.closest('select') || 
+          target.closest('textarea') || 
+          target.closest('a') ||
+          target.closest('.control-bar') || // 排除控制栏
+          target.closest('.menu-dropdown')) { // 排除菜单下拉
+        return;
+      }
+
+      mouseDownTime = Date.now();
+      dragStarted = false;
+      startX = e.clientX;
+      startY = e.clientY;
+      
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = Math.abs(e.clientX - startX);
+      const deltaY = Math.abs(e.clientY - startY);
+      const currentTime = Date.now();
+      const holdTime = currentTime - mouseDownTime;
+      
+      // 如果按键时间超过阈值或移动距离超过阈值，则开始拖拽
+      if (!dragStarted && (holdTime > DRAG_TIME_THRESHOLD || deltaX > DRAG_DISTANCE_THRESHOLD || deltaY > DRAG_DISTANCE_THRESHOLD)) {
+        dragStarted = true;
+        startWindowDrag();
+      }
+    };
+
+    const handleMouseUp = () => {
+      const currentTime = Date.now();
+      const holdTime = currentTime - mouseDownTime;
+      
+      // 如果按键时间很短且没有开始拖拽，则认为是单击，不阻止事件
+      if (holdTime < DRAG_TIME_THRESHOLD && !dragStarted) {
+        // 这是一个快速单击，让事件正常传播到视频元素
+      }
+      
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      dragStarted = false;
+      mouseDownTime = 0;
+    };
+
+    document.addEventListener('mousedown', handleMouseDown);
+    
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+
+
   const handleError = (errorMessage: string) => {
     setError(errorMessage);
   };
 
-  return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <div className="container mx-auto px-4 py-8">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-blue-400 mb-2">
-            MoPlayer
-          </h1>
-          <p className="text-gray-300">高性能音视频播放器</p>
-        </header>
+  const handleToggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+    } else {
+      document.exitFullscreen();
+    }
+  };
 
-        <div className="max-w-4xl mx-auto">
-          {!videoSrc ? (
+  const handleExit = async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const appWindow = getCurrentWindow();
+      await appWindow.close();
+    } catch (error) {
+      console.error('关闭失败:', error);
+      // 如果Tauri API失败，强制退出应用
+      if (typeof window !== 'undefined') {
+        window.close();
+      }
+    }
+  };
+
+  // 键盘快捷键
+  useKeyboardShortcuts({
+    onPlayPause: () => playPauseRef.current?.(),
+    onVolumeUp: () => volumeUpRef.current?.(),
+    onVolumeDown: () => volumeDownRef.current?.(),
+    onMute: () => muteRef.current?.(),
+    onSeekForward: () => seekForwardRef.current?.(),
+    onSeekBackward: () => seekBackwardRef.current?.(),
+    onFullscreen: handleToggleFullscreen,
+    onOpenFile: handleOpenFile,
+  });
+
+  return (
+    <div 
+      className="h-screen player-container app-background text-white relative overflow-hidden"
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+      }}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // 只有当拖拽离开整个窗口时才重置状态
+        if (e.currentTarget === e.target) {
+          setIsDragging(false);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        
+        const files = Array.from(e.dataTransfer.files);
+        const mediaFiles = files.filter(file => 
+          file.type.startsWith('video/') || file.type.startsWith('audio/')
+        );
+        
+        if (mediaFiles.length > 0) {
+          console.log('拖拽文件:', mediaFiles.map(f => f.name));
+          handleFilesAdd(mediaFiles);
+        } else {
+          console.log('没有找到支持的媒体文件');
+          setError('请拖拽音频或视频文件');
+        }
+      }}
+      style={{ cursor: 'default', userSelect: 'none' }}
+    >
+      {/* 悬浮菜单栏 - 始终显示 */}
+      <MenuBar 
+        onOpenFile={handleOpenFile}
+        onExit={handleExit}
+        isPlaying={videoSrc ? playerState.isPlaying : false}
+      />
+
+      {/* 拖拽覆盖层 */}
+      {isDragging && (
+        <div className="absolute inset-0 bg-blue-500/20 border-2 border-dashed border-blue-400 z-40 flex items-center justify-center">
+          <div className="text-2xl font-semibold">拖放文件到此处播放</div>
+        </div>
+      )}
+
+      {/* 播放器区域，占据整个屏幕 */}
+      <div className="absolute inset-0">
+        {!videoSrc ? (
+          <div className="w-full h-full flex items-center justify-center p-8">
             <FileDropZone 
               onFileSelect={handleFileSelect}
-              onFileSelectClick={handleFileSelectClick}
+              onFileSelectClick={handleOpenFile}
             />
-          ) : (
-            <div className="space-y-6">
-              <VideoPlayer
-                src={videoSrc}
-                onStateChange={handlePlayerStateChange}
-                onError={handleError}
-              />
-              <PlayerControls
-                playerState={playerState}
-                onStateChange={handlePlayerStateChange}
-              />
-            </div>
-          )}
+          </div>
+        ) : (
+          <IntegratedPlayer
+            src={videoSrc}
+            onStateChange={handlePlayerStateChange}
+            onError={handleError}
+            onPlayPause={playPauseRef}
+            onVolumeUp={volumeUpRef}
+            onVolumeDown={volumeDownRef}
+            onMute={muteRef}
+            onSeekForward={seekForwardRef}
+            onSeekBackward={seekBackwardRef}
+          />
+        )}
 
-          {error && (
-            <div className="mt-6 p-4 bg-red-600 rounded-lg">
-              <h3 className="font-semibold mb-2">播放出错</h3>
-              <p className="text-sm">{error}</p>
-              <div className="mt-3 text-sm text-red-200">
-                <p>支持的格式：MP4, WebM, OGV, MP3, WAV, OGG</p>
-                <p>请确保文件格式正确且未损坏</p>
-              </div>
-            </div>
-          )}
+        {/* 控制栏 */}
+        {videoSrc && (
+          <ControlBar
+            onPlayPause={() => playPauseRef.current?.()}
+            onStop={handleStop}
+            onPrevious={handlePrevious}
+            onNext={handleNext}
+            isPlaying={playerState.isPlaying}
+            currentTime={playerState.currentTime}
+            duration={playerState.duration}
+            playlist={playlist}
+            currentIndex={currentPlaylistIndex}
+            onPlaylistItemClick={handlePlaylistItemClick}
+            onPlaylistItemRemove={handlePlaylistItemRemove}
+            onPlaylistItemMove={handlePlaylistItemMove}
+            onFilesAdd={handleFilesAdd}
+            onFileSelectAndPlay={handleFileSelectAndPlay}
+          />
+        )}
 
-          {videoSrc && (
-            <div className="mt-6 text-center">
+        {error && (
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-600/90 p-6 rounded-lg max-w-md z-50">
+            <h3 className="font-semibold mb-2">播放出错</h3>
+            <p className="text-sm mb-3">{error}</p>
+            <div className="text-sm text-red-200 mb-4">
+              <p>支持的格式：MP4, WebM, OGV, MP3, WAV, OGG</p>
+              <p>请确保文件格式正确且未损坏</p>
+            </div>
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setError('')}
+                className="px-4 py-2 bg-red-500 hover:bg-red-400 rounded transition-colors"
+              >
+                关闭
+              </button>
               <button
                 onClick={() => {
-                  setVideoSrc('');
                   setError('');
-                  setPlayerState({
-                    isPlaying: false,
-                    currentTime: 0,
-                    duration: 0,
-                    volume: 1,
-                  });
+                  setVideoSrc('');
                 }}
-                className="px-6 py-2 bg-gray-600 hover:bg-gray-500 rounded-lg transition-colors"
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded transition-colors"
               >
-                选择其他文件
+                重新选择文件
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

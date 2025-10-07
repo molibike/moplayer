@@ -2,6 +2,178 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #374151;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #6b7280;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* 自定义 range 滑块样式 */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-track {
+  background: #4b5563;
+  height: 4px;
+  border-radius: 2px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: #3b82f6;
+  height: 5px;  /* 调整为5像素 */
+  width: 5px;   /* 调整为5像素 */
+  border-radius: 50%;
+  border: none;
+  box-shadow: 0 0 0 1px #ffffff, 0 1px 2px rgba(0, 0, 0, 0.2);
+  margin-top: -0.5px; /* 向上调整，让5px滑块覆盖在4px轨道上 */
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: #2563eb;
+  transform: scale(1.5);  /* 增加悬停缩放效果以便于操作 */
+  box-shadow: 0 0 0 1px #ffffff, 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+input[type="range"]::-moz-range-track {
+  background: #4b5563;
+  height: 4px;
+  border-radius: 2px;
+  border: none;
+}
+
+input[type="range"]::-moz-range-thumb {
+  background: #3b82f6;
+  height: 5px;  /* 调整为5像素 */
+  width: 5px;   /* 调整为5像素 */
+  border-radius: 50%;
+  border: none;
+  box-shadow: 0 0 0 1px #ffffff, 0 1px 2px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  margin-top: -0.5px; /* 向上调整，让5px滑块覆盖在4px轨道上 */
+}
+
+/* 专门为进度条轨道添加样式 - 带黄色进度显示 */
+.progress-slider::-webkit-slider-track {
+  background: #4b5563 !important;
+  height: 4px !important;
+  border-radius: 2px !important;
+  border: none !important;
+}
+
+/* 专门为音量滑块轨道添加样式 */
+.volume-slider::-webkit-slider-track {
+  background: #4b5563 !important;
+  height: 4px !important;
+  border-radius: 2px !important;
+  border: none !important;
+}
+
+/* 为进度滑块添加黄色进度显示 */
+.progress-slider {
+  background: linear-gradient(to right, #fbbf24 0%, #fbbf24 var(--progress, 0%), #4b5563 var(--progress, 0%), #4b5563 100%) !important;
+  border-radius: 2px !important;
+  height: 4px !important;
+}
+
+/* 为音量滑块添加黄色进度显示 */
+.volume-slider {
+  background: linear-gradient(to right, #fbbf24 0%, #fbbf24 var(--volume-progress, 0%), #4b5563 var(--volume-progress, 0%), #4b5563 100%) !important;
+  border-radius: 2px !important;
+  height: 4px !important;
+}
+
+/* 专门为进度条和音量滑块添加样式 */
+.progress-slider::-webkit-slider-thumb,
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background: #ffffff !important;
+  height: 5px !important;  /* 调整为5像素高度 */
+  width: 5px !important;   /* 调整为5像素宽度 */
+  border-radius: 50% !important; /* 改为圆形 */
+  border: none !important;
+  box-shadow: none !important; /* 移除边框和阴影 */
+  margin-top: -0.5px !important; /* 向上调整0.5像素，让5px圆形滑块中心与4px轨道对齐 */
+  cursor: pointer !important;
+  position: relative !important;
+}
+
+.progress-slider::-webkit-slider-thumb:hover,
+.volume-slider::-webkit-slider-thumb:hover {
+  background: #ffffff;
+  transform: scale(1.5);  /* 增加悬停缩放效果以便于操作 */
+  box-shadow: none; /* 移除悬停时的边框和阴影 */
+}
+
+/* 播放器特定样式 */
+.player-container {
+  background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+}
+
+.control-button {
+  transition: all 0.2s ease;
+}
+
+.control-button:hover {
+  transform: scale(1.05);
+  color: #3b82f6;
+}
+
+.control-button:active {
+  transform: scale(0.95);
+}
+
+/* 菜单动画 */
+.menu-dropdown {
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 全屏时隐藏滚动条 */
+.fullscreen-container {
+  overflow: hidden;
+}
+
+/* 文件拖拽区域动画 */
+.drop-zone {
+  transition: all 0.3s ease;
+}
+
+.drop-zone.drag-over {
+  transform: scale(1.02);
+  box-shadow: 0 20px 40px rgba(59, 130, 246, 0.3);
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

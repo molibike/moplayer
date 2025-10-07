@@ -11,20 +11,45 @@
   "app": {
     "windows": [
       {
-        "title": "MoPlayer - 高性能音视频播放器",
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
+        "title": "MoPlayer",
+        "width": 720,
+        "height": 405,
+        "minWidth": 320,
+        "minHeight": 180,
         "resizable": true,
         "fullscreen": false,
-        "decorations": true,
-        "transparent": false,
-        "center": true
+        "decorations": false,
+        "transparent": true,
+        "center": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "main-capability",
+          "description": "Capability for the main window",
+          "windows": ["main"],
+          "permissions": [
+            "core:window:default",
+            "core:window:allow-close",
+            "core:window:allow-minimize",
+            "core:window:allow-maximize",
+            "core:window:allow-unmaximize",
+            "core:window:allow-start-dragging",
+            "core:window:allow-set-always-on-top",
+            "core:window:allow-set-position",
+            "core:window:allow-set-size",
+            "core:window:allow-center",
+            "core:window:allow-show",
+            "core:window:allow-hide",
+            "fs:default",
+            "fs:allow-read-file",
+            "fs:allow-exists"
+          ]
+        }
+      ]
     }
   },
   "bundle": {
@@ -39,7 +64,6 @@
     "resources": [],
     "externalBin": [],
     "copyright": "",
-    "category": "AudioVideo",
     "shortDescription": "高性能音视频播放器",
     "longDescription": "基于 Tauri + Rust/FFmpeg 架构的高性能小体积 Windows 桌面音视频播放器",
     "windows": {
