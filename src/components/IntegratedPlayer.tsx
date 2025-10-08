@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
+import AudioPlayerInterface from './AudioPlayerInterface';
 
 interface PlayerState {
   isPlaying: boolean;
@@ -10,18 +11,24 @@ interface PlayerState {
 
 interface IntegratedPlayerProps {
   src: string;
+  fileName?: string;
+  fileBlob?: File;
   onStateChange: (state: Partial<PlayerState>) => void;
   onError?: (error: string) => void;
+  onEnded?: () => void;
   onPlayPause?: React.MutableRefObject<(() => void) | null>;
   onVolumeUp?: React.MutableRefObject<(() => void) | null>;
   onVolumeDown?: React.MutableRefObject<(() => void) | null>;
   onMute?: React.MutableRefObject<(() => void) | null>;
   onSeekForward?: React.MutableRefObject<(() => void) | null>;
   onSeekBackward?: React.MutableRefObject<(() => void) | null>;
+  onSeekTo?: React.MutableRefObject<((time: number) => void) | null>;
 }
 
 const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({ 
   src, 
+  fileName,
+  fileBlob,
   onStateChange, 
   onError,
   onPlayPause: externalPlayPause,
@@ -30,6 +37,8 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
   onMute: externalMute,
   onSeekForward: externalSeekForward,
   onSeekBackward: externalSeekBackward,
+  onSeekTo: externalSeekTo,
+  onEnded,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playerState, setPlayerState] = useState<PlayerState>({
@@ -40,6 +49,37 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     muted: false,
   });
   const [isDragging] = useState(false);
+
+  // 检测是否为音频文件
+  const isAudioFile = (src: string, fileName?: string, fileBlob?: File): boolean => {
+    const audioExtensions = ['.mp3', '.wav', '.ogg', '.aac', '.flac', '.m4a', '.wma'];
+    const audioMimePrefix = 'audio/';
+    
+    // 先检查文件Blob的MIME
+    if (fileBlob && typeof fileBlob.type === 'string') {
+      if (fileBlob.type.startsWith(audioMimePrefix)) {
+        return true;
+      }
+    }
+
+    // 首先检查文件名扩展名
+    if (fileName) {
+      const extension = fileName.toLowerCase().substring(fileName.lastIndexOf('.'));
+      if (audioExtensions.includes(extension)) {
+        return true;
+      }
+    }
+    
+    // 检查src中的扩展名
+    const srcExtension = src.toLowerCase().substring(src.lastIndexOf('.'));
+    if (audioExtensions.includes(srcExtension)) {
+      return true;
+    }
+    
+    return false;
+  };
+
+  const isAudio = isAudioFile(src, fileName, fileBlob);
 
   // 处理src变化时的状态重置
   useEffect(() => {
@@ -139,12 +179,17 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
       onError?.(errorMessage);
     };
 
+    const handleEnded = () => {
+      onEnded?.();
+    };
+
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
     video.addEventListener('timeupdate', handleTimeUpdate);
     video.addEventListener('play', handlePlay);
     video.addEventListener('pause', handlePause);
     video.addEventListener('volumechange', handleVolumeChange);
     video.addEventListener('error', handleError);
+    video.addEventListener('ended', handleEnded);
 
     return () => {
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
@@ -153,8 +198,9 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
       video.removeEventListener('pause', handlePause);
       video.removeEventListener('volumechange', handleVolumeChange);
       video.removeEventListener('error', handleError);
+      video.removeEventListener('ended', handleEnded);
     };
-  }, [onStateChange, onError, isDragging]);
+  }, [onStateChange, onError, isDragging, onEnded]);
 
   // 格式化时间函数（暂时未使用）
   // const formatTime = (time: number) => {
@@ -229,15 +275,22 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     video.muted = !video.muted;
   }, []);
 
-  // 暴露方法给父组件
+  // 暴露方法给父组件（仅在视频模式下设置，避免覆盖音频模式的绑定）
   useEffect(() => {
+    if (isAudio) return; // 音频模式下由 AudioPlayerInterface 负责绑定
     if (externalPlayPause) externalPlayPause.current = handlePlayPause;
     if (externalVolumeUp) externalVolumeUp.current = handleVolumeUp;
     if (externalVolumeDown) externalVolumeDown.current = handleVolumeDown;
     if (externalMute) externalMute.current = handleMute;
     if (externalSeekForward) externalSeekForward.current = handleSeekForward;
     if (externalSeekBackward) externalSeekBackward.current = handleSeekBackward;
-  }, [handlePlayPause, handleVolumeUp, handleVolumeDown, handleMute, handleSeekForward, handleSeekBackward]);
+    if (externalSeekTo) externalSeekTo.current = (time: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const clamped = Math.max(0, Math.min(video.duration || 0, time));
+      video.currentTime = clamped;
+    };
+  }, [handlePlayPause, handleVolumeUp, handleVolumeDown, handleMute, handleSeekForward, handleSeekBackward, isAudio]);
 
   // 进度条拖拽处理函数（暂时未使用）
   // const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -259,6 +312,28 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
   //   video.muted = volume === 0;
   // };
 
+  // 如果是音频文件，使用音频播放界面
+  if (isAudio) {
+    return (
+      <AudioPlayerInterface
+        src={src}
+        fileName={fileName || '未知文件'}
+        fileBlob={fileBlob}
+        onStateChange={onStateChange}
+        onError={onError}
+        onEnded={onEnded}
+        onPlayPause={externalPlayPause}
+        onVolumeUp={externalVolumeUp}
+        onVolumeDown={externalVolumeDown}
+        onMute={externalMute}
+        onSeekForward={externalSeekForward}
+        onSeekBackward={externalSeekBackward}
+        onSeekTo={externalSeekTo}
+      />
+    );
+  }
+
+  // 如果是视频文件，使用原有的视频播放界面
   return (
     <div className="relative bg-black flex-1 flex items-center justify-center w-full h-full p-0">
       <video

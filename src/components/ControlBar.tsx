@@ -22,6 +22,9 @@ interface ControlBarProps {
   onPlaylistItemMove: (fromIndex: number, toIndex: number) => void;
   onFilesAdd: (files: File[]) => void;
   onFileSelectAndPlay: (files: File[]) => void;
+  onSeekTo?: (time: number) => void;
+  playMode: 'sequential' | 'single' | 'list' | 'random';
+  onTogglePlayMode: () => void;
 }
 
 const ControlBar: React.FC<ControlBarProps> = ({
@@ -39,6 +42,9 @@ const ControlBar: React.FC<ControlBarProps> = ({
   onPlaylistItemMove,
   onFilesAdd,
   onFileSelectAndPlay,
+  onSeekTo,
+  playMode,
+  onTogglePlayMode,
 }) => {
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
@@ -49,6 +55,68 @@ const ControlBar: React.FC<ControlBarProps> = ({
   const playlistRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<NodeJS.Timeout>();
   const mouseMoveTimeoutRef = useRef<NodeJS.Timeout>();
+
+  // 播放模式标签
+  const playModeLabels = {
+    sequential: '顺序',
+    single: '单曲',
+    list: '列表',
+    random: '随机'
+  };
+
+  const playModeIcons = {
+    sequential: '→',
+    single: '1',
+    list: '∞',
+    random: '⚡'
+  };
+
+  // 媒体类型检测函数
+  const isAudioFile = (file: File) => {
+    return file.type.startsWith('audio/') || 
+           /\.(mp3|wav|ogg|flac|aac|m4a|wma)$/i.test(file.name);
+  };
+
+  const isVideoFile = (file: File) => {
+    return file.type.startsWith('video/') || 
+           /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/i.test(file.name);
+  };
+
+  // 获取当前播放项的媒体类型
+  const getCurrentMediaType = () => {
+    if (currentIndex >= 0 && currentIndex < playlist.length) {
+      const currentFile = playlist[currentIndex].file;
+      if (isAudioFile(currentFile)) return 'audio';
+      if (isVideoFile(currentFile)) return 'video';
+    }
+    return 'unknown';
+  };
+
+  // 根据当前媒体类型过滤播放列表
+  const currentMediaType = getCurrentMediaType();
+  const filteredPlaylist = playlist.filter(item => {
+    if (currentMediaType === 'audio') return isAudioFile(item.file);
+    if (currentMediaType === 'video') return isVideoFile(item.file);
+    return true; // 如果类型未知，显示所有项目
+  });
+
+  // 创建原始索引映射
+  const originalIndexMap = new Map<number, number>();
+  let filteredIndex = 0;
+  playlist.forEach((item, originalIndex) => {
+    if (currentMediaType === 'audio' && isAudioFile(item.file)) {
+      originalIndexMap.set(filteredIndex, originalIndex);
+      filteredIndex++;
+    } else if (currentMediaType === 'video' && isVideoFile(item.file)) {
+      originalIndexMap.set(filteredIndex, originalIndex);
+      filteredIndex++;
+    } else if (currentMediaType === 'unknown') {
+      originalIndexMap.set(filteredIndex, originalIndex);
+      filteredIndex++;
+    }
+  });
+
+
 
   // 控制栏显示逻辑 - 初始窗口始终显示
   useEffect(() => {
@@ -175,12 +243,15 @@ const ControlBar: React.FC<ControlBarProps> = ({
     return '未选择文件';
   };
 
+  // 根据当前播放文件类型过滤显示的列表与模式标签
+
+
   if (!isVisible) return null;
 
   return (
     <div 
       className="control-bar fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur-md border-t border-gray-700/50 z-40 transition-all duration-300"
-      style={{ height: '60px' }} // 固定高度，减小50%
+      style={{ height: '60px' /* 固定高度，减小50% */ }}
       onMouseEnter={() => setIsVisible(true)}
       onMouseLeave={() => {
         if (isPlaying) {
@@ -213,18 +284,11 @@ const ControlBar: React.FC<ControlBarProps> = ({
               onMouseUp={() => setIsDraggingProgress(false)}
               onChange={(e) => {
                 const newTime = parseFloat(e.target.value);
-                const video = document.querySelector('video');
-                if (video) {
-                  video.currentTime = newTime;
-                }
+                if (onSeekTo) onSeekTo(newTime);
               }}
               onInput={(e) => {
-                // 拖拽过程中实时更新
                 const newTime = parseFloat((e.target as HTMLInputElement).value);
-                const video = document.querySelector('video');
-                if (video) {
-                  video.currentTime = newTime;
-                }
+                if (onSeekTo) onSeekTo(newTime);
               }}
               style={{
                 background: 'transparent',
@@ -244,28 +308,30 @@ const ControlBar: React.FC<ControlBarProps> = ({
       {/* 第二行：播放控制按钮和文件名 */}
       <div className="flex items-center justify-between px-3 py-1 border-t border-gray-700/30" style={{ alignItems: 'center', justifyContent: 'center', height: '30px' }}>
         {/* 左侧：播放控制按钮 */}
-        <div className="flex items-center space-x-1">
+        <div className="flex items-center" style={{ gap: 'clamp(2px, 0.5vw, 4px)' }}>
           <button
             onClick={onPrevious}
-            className="p-2 hover:bg-white/20 rounded transition-colors"
+            className="hover:bg-white/20 rounded transition-colors"
+            style={{ padding: 'clamp(4px, 1vw, 8px)' }}
             title="上一曲"
           >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+            <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
               <path d="M8.445 14.832A1 1 0 0010 14v-2.798l5.445 3.63A1 1 0 0017 14V6a1 1 0 00-1.555-.832L10 8.798V6a1 1 0 00-1.555-.832l-6 4a1 1 0 000 1.664l6 4z"/>
             </svg>
           </button>
           
           <button
             onClick={onPlayPause}
-            className="p-2 hover:bg-white/20 rounded transition-colors"
+            className="hover:bg-white/20 rounded transition-colors"
+            style={{ padding: 'clamp(4px, 1vw, 8px)' }}
             title={isPlaying ? "暂停" : "播放"}
           >
             {isPlaying ? (
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
                 <path d="M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z"/>
               </svg>
             ) : (
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd"/>
               </svg>
             )}
@@ -273,29 +339,35 @@ const ControlBar: React.FC<ControlBarProps> = ({
           
           <button
             onClick={onStop}
-            className="p-2 hover:bg-white/20 rounded transition-colors"
+            className="hover:bg-white/20 rounded transition-colors"
+            style={{ padding: 'clamp(4px, 1vw, 8px)' }}
             title="停止"
           >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+            <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
               <path d="M5.25 3A2.25 2.25 0 003 5.25v9.5A2.25 2.25 0 005.25 17h9.5A2.25 2.25 0 0017 14.75v-9.5A2.25 2.25 0 0014.75 3h-9.5z"/>
             </svg>
           </button>
           
           <button
             onClick={onNext}
-            className="p-2 hover:bg-white/20 rounded transition-colors"
+            className="hover:bg-white/20 rounded transition-colors"
+            style={{ padding: 'clamp(4px, 1vw, 8px)' }}
             title="下一曲"
           >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+            <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
               <path d="M12.5 5.634a1 1 0 011.55-.832l6 4a1 1 0 010 1.664l-6 4A1 1 0 0112 14v-2.798l-5.445 3.63A1 1 0 015 14V6a1 1 0 011.555-.832L12 8.798V6a1 1 0 01.5-.866z"/>
             </svg>
           </button>
         </div>
 
         {/* 中间：文件名显示 */}
-        <div className="flex-1 mx-4">
+        <div className="flex-1" style={{ margin: 'clamp(8px, 2vw, 16px)' }}>
           <div 
-            className="text-sm text-gray-300 truncate text-center cursor-pointer hover:text-white transition-colors max-w-[300px] mx-auto"
+            className="text-gray-300 truncate text-center cursor-pointer hover:text-white transition-colors mx-auto"
+            style={{ 
+              fontSize: 'clamp(0.75rem, 1.5vw, 0.875rem)',
+              maxWidth: 'clamp(150px, 30vw, 300px)'
+            }}
             onClick={() => {
               // 打开文件选择对话框
               const input = document.createElement('input');
@@ -318,16 +390,17 @@ const ControlBar: React.FC<ControlBarProps> = ({
         </div>
 
         {/* 右侧：音量控制和播放列表按钮 */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center" style={{ gap: 'clamp(4px, 1vw, 8px)' }}>
           {/* 音量控制 */}
-          <div className="flex items-center space-x-1">
+          <div className="flex items-center" style={{ gap: 'clamp(2px, 0.5vw, 4px)' }}>
             <div 
-              className="w-4 h-4 text-gray-300 cursor-pointer hover:text-white transition-colors"
+              className="text-gray-300 cursor-pointer hover:text-white transition-colors"
+              style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }}
               onClick={handleMuteToggle}
               title={isMuted ? "取消静音" : "静音"}
             >
               <svg 
-                className="w-4 h-4" 
+                style={{ width: '100%', height: '100%' }}
                 fill="currentColor" 
                 viewBox="0 0 20 20"
               >
@@ -340,20 +413,28 @@ const ControlBar: React.FC<ControlBarProps> = ({
               )}
               </svg>
             </div>
-            <div className="relative flex items-center h-4">
-              <div className="w-16 h-px bg-gray-500/30 absolute top-1/2 transform -translate-y-1/2"></div>
+            <div className="relative flex items-center" style={{ height: 'clamp(12px, 2vw, 16px)' }}>
+              <div 
+                className="bg-gray-500/30 absolute top-1/2 transform -translate-y-1/2"
+                style={{ 
+                  width: 'clamp(40px, 8vw, 64px)', 
+                  height: '1px' 
+                }}
+              ></div>
               <input
                 type="range"
-                className="w-16 h-1 appearance-none cursor-pointer bg-transparent relative z-10 volume-slider"
-                min="0"
-                max="100"
-                value={volume}
-                onChange={handleVolumeChange}
+                className="appearance-none cursor-pointer bg-transparent relative z-10 volume-slider"
                 style={{
+                  width: 'clamp(40px, 8vw, 64px)',
+                  height: '4px',
                   background: 'transparent',
                   outline: 'none',
                   '--volume-progress': `${volume}%`,
                 } as React.CSSProperties}
+                min="0"
+                max="100"
+                value={volume}
+                onChange={handleVolumeChange}
               />
             </div>
           </div>
@@ -362,59 +443,83 @@ const ControlBar: React.FC<ControlBarProps> = ({
           <div className="relative" ref={playlistRef}>
           <button
             onClick={() => setShowPlaylist(!showPlaylist)}
-            className="p-2 hover:bg-white/20 rounded transition-colors"
+            className="hover:bg-white/20 rounded transition-colors"
+            style={{ padding: 'clamp(4px, 1vw, 8px)' }}
             title="播放列表"
           >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+            <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M2 4.75A.75.75 0 012.75 4h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 4.75zm0 5A.75.75 0 012.75 9h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 9.75zM2 14.75a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75z" clipRule="evenodd"/>
             </svg>
           </button>
 
           {/* 播放列表下拉菜单 */}
           {showPlaylist && (
-            <div className="absolute bottom-full right-0 mb-2 bg-gray-900/95 backdrop-blur-md border border-gray-700/50 shadow-xl rounded-md min-w-64 max-h-64 overflow-y-auto z-50">
-              <div className="p-2 border-b border-gray-700/50">
-                <div className="text-sm font-semibold">播放列表 ({playlist.length})</div>
+            <div 
+              className="absolute bottom-full right-0 mb-2 bg-gray-900/95 backdrop-blur-md border border-gray-700/50 shadow-xl rounded-md overflow-y-auto z-50"
+              style={{
+                minWidth: '256px',
+                maxWidth: '38vw',
+                maxHeight: '100vh',
+                width: 'clamp(256px, 38vw, 600px)'
+              }}
+            >
+              <div className="p-2 border-b border-gray-700/50 flex items-center justify-between">
+                <div className="text-sm font-semibold">
+                  播放列表 ({filteredPlaylist.length}
+                  {currentMediaType !== 'unknown' && ` ${currentMediaType === 'audio' ? '音频' : '视频'}`})
+                </div>
+                <div className="flex items-center space-x-2">
+                  {/* 播放模式切换按钮 */}
+                  <button
+                    onClick={onTogglePlayMode}
+                    className="px-2 py-1 bg-gray-700/50 hover:bg-gray-600/50 text-white text-xs rounded flex items-center space-x-1 transition-colors"
+                    title={`当前模式: ${playModeLabels[playMode]}`}
+                  >
+                    <span className="text-sm">{playModeIcons[playMode]}</span>
+                    <span>{playModeLabels[playMode]}</span>
+                  </button>
+                  {/* 加号按钮 - 添加文件 */}
+                  <button
+                    onClick={() => {
+                      const input = document.createElement('input');
+                      input.type = 'file';
+                      input.accept = 'video/*,audio/*';
+                      input.multiple = true;
+                      input.onchange = (e) => {
+                        const files = Array.from((e.target as HTMLInputElement).files || []);
+                        if (files.length > 0) {
+                          onFilesAdd(files);
+                        }
+                      };
+                      input.click();
+                    }}
+                    className="w-6 h-6 bg-blue-600/50 hover:bg-blue-500/50 text-white text-sm rounded flex items-center justify-center transition-colors"
+                    title="添加文件到播放列表"
+                  >
+                    +
+                  </button>
+                </div>
               </div>
               
-              {playlist.length === 0 ? (
+              {filteredPlaylist.length === 0 ? (
                 <div className="p-4 text-center text-gray-400 text-sm">
-                  播放列表为空
+                  {playlist.length === 0 ? '播放列表为空' : `当前${currentMediaType === 'audio' ? '音频' : '视频'}列表为空`}
                   <div className="mt-2 text-xs">拖拽文件到此处添加</div>
                 </div>
               ) : (
                 <div className="p-2">
-                  {/* 添加文件按钮 */}
-                  <div className="p-2 border-b border-gray-700/30 mb-2">
-                    <button
-                      onClick={() => {
-                        const input = document.createElement('input');
-                        input.type = 'file';
-                        input.accept = 'video/*,audio/*';
-                        input.multiple = true;
-                        input.onchange = (e) => {
-                          const files = Array.from((e.target as HTMLInputElement).files || []);
-                          if (files.length > 0) {
-                            onFilesAdd(files);
-                          }
-                        };
-                        input.click();
-                      }}
-                      className="w-full bg-blue-600/50 hover:bg-blue-500/50 text-white text-sm py-2 px-3 rounded transition-colors"
-                    >
-                      + 添加文件到播放列表
-                    </button>
-                  </div>
                   
-                  {playlist.map((item, index) => (
-                    <div
+                  {filteredPlaylist.map((item, filteredIndex) => {
+                    const originalIndex = originalIndexMap.get(filteredIndex) ?? filteredIndex;
+                    return (
+                      <div
                       key={item.id}
                       className={`flex items-center justify-between p-2 rounded hover:bg-gray-700/50 cursor-pointer group ${
-                        index === currentIndex ? 'bg-blue-600/50' : ''
+                        originalIndex === currentIndex ? 'bg-blue-600/50' : ''
                       }`}
                       onClick={() => {
                         if (onPlaylistItemClick) {
-                          onPlaylistItemClick(index);
+                          onPlaylistItemClick(originalIndex);
                           setShowPlaylist(false);
                         }
                       }}
@@ -423,12 +528,12 @@ const ControlBar: React.FC<ControlBarProps> = ({
                         {item.name}
                       </span>
                       <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {index > 0 && (
+                        {originalIndex > 0 && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               if (onPlaylistItemMove) {
-                                onPlaylistItemMove(index, index - 1);
+                                onPlaylistItemMove(originalIndex, originalIndex - 1);
                               }
                             }}
                             className="p-1 hover:bg-white/20 rounded text-xs"
@@ -437,12 +542,12 @@ const ControlBar: React.FC<ControlBarProps> = ({
                             ↑
                           </button>
                         )}
-                        {index < playlist.length - 1 && (
+                        {originalIndex < playlist.length - 1 && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               if (onPlaylistItemMove) {
-                                onPlaylistItemMove(index, index + 1);
+                                onPlaylistItemMove(originalIndex, originalIndex + 1);
                               }
                             }}
                             className="p-1 hover:bg-white/20 rounded text-xs"
@@ -455,7 +560,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
                           onClick={(e) => {
                             e.stopPropagation();
                             if (onPlaylistItemRemove) {
-                              onPlaylistItemRemove(index);
+                              onPlaylistItemRemove(originalIndex);
                             }
                           }}
                           className="p-1 hover:bg-red-500/50 rounded text-xs"
@@ -465,14 +570,14 @@ const ControlBar: React.FC<ControlBarProps> = ({
                         </button>
                       </div>
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               )}
             </div>
           )}
-          </div>
         </div>
-
+      </div>
       </div>
     </div>
   );

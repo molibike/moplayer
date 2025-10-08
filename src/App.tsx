@@ -20,6 +20,8 @@ interface PlaylistItem {
   file: File;
 }
 
+type PlayMode = 'sequential' | 'single' | 'list' | 'random';
+
 function App() {
   const [videoSrc, setVideoSrc] = useState<string>('');
   const [playerState, setPlayerState] = useState<PlayerState>({
@@ -33,6 +35,7 @@ function App() {
   const [currentPlaylistIndex, setCurrentPlaylistIndex] = useState<number>(-1);
   const [error, setError] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
+  const [playMode, setPlayMode] = useState<PlayMode>('sequential');
 
   // 播放器方法引用
   const playPauseRef = useRef<(() => void) | null>(null);
@@ -41,6 +44,73 @@ function App() {
   const muteRef = useRef<(() => void) | null>(null);
   const seekForwardRef = useRef<(() => void) | null>(null);
   const seekBackwardRef = useRef<(() => void) | null>(null);
+  const seekToRef = useRef<((time: number) => void) | null>(null);
+
+  // 切歌结束回调，根据播放模式决定下一首
+  const handleTrackEnded = () => {
+    if (playlist.length === 0 || currentPlaylistIndex < 0) return;
+    
+    const { filteredPlaylist, originalIndexMap, currentFilteredIndex } = getFilteredPlaylistInfo();
+    
+    switch (playMode) {
+      case 'single': {
+        // 单曲循环：重新播放当前
+        const item = playlist[currentPlaylistIndex];
+        setVideoSrc(item.url);
+        setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
+        break;
+      }
+      case 'list': {
+        // 列表循环：下一首，末尾回到0（在过滤列表中）
+        if (filteredPlaylist.length === 0 || currentFilteredIndex < 0) return;
+        
+        let nextFilteredIndex = currentFilteredIndex + 1;
+        if (nextFilteredIndex >= filteredPlaylist.length) nextFilteredIndex = 0;
+        
+        const nextOriginalIndex = originalIndexMap.get(nextFilteredIndex);
+        if (nextOriginalIndex !== undefined) {
+          handlePlaylistItemClick(nextOriginalIndex);
+        }
+        break;
+      }
+      case 'random': {
+        // 随机：在过滤列表中选择一个非当前的随机索引
+        if (filteredPlaylist.length === 0 || currentFilteredIndex < 0) return;
+        
+        if (filteredPlaylist.length > 1) {
+          let nextFilteredIndex = currentFilteredIndex;
+          while (nextFilteredIndex === currentFilteredIndex) {
+            nextFilteredIndex = Math.floor(Math.random() * filteredPlaylist.length);
+          }
+          const nextOriginalIndex = originalIndexMap.get(nextFilteredIndex);
+          if (nextOriginalIndex !== undefined) {
+            handlePlaylistItemClick(nextOriginalIndex);
+          }
+        } else {
+          // 过滤列表中只有一首歌，重新播放当前
+          handlePlaylistItemClick(currentPlaylistIndex);
+        }
+        break;
+      }
+      case 'sequential':
+      default: {
+        // 顺序播放：在过滤列表中到尾部停止
+        if (filteredPlaylist.length === 0 || currentFilteredIndex < 0) return;
+        
+        const nextFilteredIndex = currentFilteredIndex + 1;
+        if (nextFilteredIndex < filteredPlaylist.length) {
+          const nextOriginalIndex = originalIndexMap.get(nextFilteredIndex);
+          if (nextOriginalIndex !== undefined) {
+            handlePlaylistItemClick(nextOriginalIndex);
+          }
+        } else {
+          // 停止
+          setPlayerState(prev => ({ ...prev, isPlaying: false }));
+        }
+        break;
+      }
+    }
+  };
 
   const handleFileSelect = async (file: File) => {
     try {
@@ -184,24 +254,95 @@ function App() {
     }
   };
 
+  // 媒体类型检测函数
+  const isAudioFile = (file: File) => {
+    return file.type.startsWith('audio/');
+  };
+
+  const isVideoFile = (file: File) => {
+    return file.type.startsWith('video/');
+  };
+
+  // 获取当前媒体类型
+  const getCurrentMediaType = () => {
+    if (currentPlaylistIndex < 0 || currentPlaylistIndex >= playlist.length) {
+      return 'unknown';
+    }
+    const currentFile = playlist[currentPlaylistIndex].file;
+    if (isAudioFile(currentFile)) {
+      return 'audio';
+    } else if (isVideoFile(currentFile)) {
+      return 'video';
+    }
+    return 'unknown';
+  };
+
+  // 获取按当前媒体类型过滤的播放列表和索引映射
+  const getFilteredPlaylistInfo = () => {
+    const currentMediaType = getCurrentMediaType();
+    if (currentMediaType === 'unknown') {
+      return { filteredPlaylist: playlist, originalIndexMap: new Map(), currentFilteredIndex: currentPlaylistIndex };
+    }
+
+    // 过滤播放列表
+    const filteredPlaylist = playlist.filter(item => {
+      if (currentMediaType === 'audio') {
+        return isAudioFile(item.file);
+      } else {
+        return isVideoFile(item.file);
+      }
+    });
+
+    // 创建原始索引映射
+    const originalIndexMap = new Map<number, number>();
+    let filteredIndex = 0;
+    playlist.forEach((item, originalIndex) => {
+      const isMatch = currentMediaType === 'audio' ? isAudioFile(item.file) : isVideoFile(item.file);
+      if (isMatch) {
+        originalIndexMap.set(filteredIndex, originalIndex);
+        filteredIndex++;
+      }
+    });
+
+    // 找到当前项在过滤列表中的索引
+    const currentFilteredIndex = Array.from(originalIndexMap.entries())
+      .find(([, originalIndex]) => originalIndex === currentPlaylistIndex)?.[0] ?? -1;
+
+    return { filteredPlaylist, originalIndexMap, currentFilteredIndex };
+  };
+
   // 上一曲
   const handlePrevious = () => {
     if (playlist.length === 0) return;
     
-    let newIndex = currentPlaylistIndex - 1;
-    if (newIndex < 0) newIndex = playlist.length - 1; // 循环播放
+    const { filteredPlaylist, originalIndexMap, currentFilteredIndex } = getFilteredPlaylistInfo();
     
-    handlePlaylistItemClick(newIndex);
+    if (filteredPlaylist.length === 0 || currentFilteredIndex < 0) return;
+    
+    let newFilteredIndex = currentFilteredIndex - 1;
+    if (newFilteredIndex < 0) newFilteredIndex = filteredPlaylist.length - 1; // 循环播放
+    
+    const newOriginalIndex = originalIndexMap.get(newFilteredIndex);
+    if (newOriginalIndex !== undefined) {
+      handlePlaylistItemClick(newOriginalIndex);
+    }
   };
 
   // 下一曲
   const handleNext = () => {
     if (playlist.length === 0) return;
     
-    let newIndex = currentPlaylistIndex + 1;
-    if (newIndex >= playlist.length) newIndex = 0; // 循环播放
+    const { filteredPlaylist, originalIndexMap, currentFilteredIndex } = getFilteredPlaylistInfo();
     
-    handlePlaylistItemClick(newIndex);
+    if (filteredPlaylist.length === 0 || currentFilteredIndex < 0) return;
+    
+    let newFilteredIndex = currentFilteredIndex + 1;
+    if (newFilteredIndex >= filteredPlaylist.length) newFilteredIndex = 0; // 循环播放
+    
+    const newOriginalIndex = originalIndexMap.get(newFilteredIndex);
+    if (newOriginalIndex !== undefined) {
+      handlePlaylistItemClick(newOriginalIndex);
+    }
   };
 
   // 停止播放
@@ -417,14 +558,18 @@ function App() {
         ) : (
           <IntegratedPlayer
             src={videoSrc}
+            fileName={playlist[currentPlaylistIndex]?.name}
+            fileBlob={playlist[currentPlaylistIndex]?.file}
             onStateChange={handlePlayerStateChange}
             onError={handleError}
+            onEnded={handleTrackEnded}
             onPlayPause={playPauseRef}
             onVolumeUp={volumeUpRef}
             onVolumeDown={volumeDownRef}
             onMute={muteRef}
             onSeekForward={seekForwardRef}
             onSeekBackward={seekBackwardRef}
+            onSeekTo={seekToRef}
           />
         )}
 
@@ -445,6 +590,19 @@ function App() {
             onPlaylistItemMove={handlePlaylistItemMove}
             onFilesAdd={handleFilesAdd}
             onFileSelectAndPlay={handleFileSelectAndPlay}
+            onSeekTo={(t: number) => seekToRef.current?.(t)}
+            playMode={playMode}
+            onTogglePlayMode={() => {
+              setPlayMode(prev => {
+                switch (prev) {
+                  case 'sequential': return 'single';
+                  case 'single': return 'list';
+                  case 'list': return 'random';
+                  case 'random': return 'sequential';
+                  default: return 'sequential';
+                }
+              });
+            }}
           />
         )}
 
