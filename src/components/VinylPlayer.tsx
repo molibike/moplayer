@@ -40,8 +40,7 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
     };
   }, [isPlaying]);
 
-  // 默认封面图片（如果没有提供封面）
-  const defaultCover = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cdefs%3E%3CradialGradient id='vinyl' cx='50%25' cy='50%25' r='50%25'%3E%3Cstop offset='0%25' style='stop-color:%23333;stop-opacity:1' /%3E%3Cstop offset='30%25' style='stop-color:%23222;stop-opacity:1' /%3E%3Cstop offset='70%25' style='stop-color:%23111;stop-opacity:1' /%3E%3Cstop offset='100%25' style='stop-color:%23000;stop-opacity:1' /%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='100' cy='100' r='100' fill='url(%23vinyl)'/%3E%3Ccircle cx='100' cy='100' r='15' fill='%23333'/%3E%3Ctext x='100' y='105' text-anchor='middle' fill='%23666' font-size='12' font-family='Arial'%3E♪%3C/text%3E%3C/svg%3E";
+
 
   // 计算几何坐标：按钮中心 -> 关节 -> 唱针
   useLayoutEffect(() => {
@@ -91,13 +90,21 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
     return () => window.removeEventListener('resize', compute);
   }, [buttonElement]);
 
+  // 调试信息：显示封面图像状态
+  console.log('VinylPlayer received coverImage:', { 
+    hasCoverImage: !!coverImage,
+    coverImageLength: coverImage?.length,
+    coverImageType: coverImage?.substring(0, 50),
+    coverImagePrefix: coverImage?.substring(0, 30)
+  });
+
   return (
     <div className="flex items-end justify-center w-full h-full p-4">
       {/* 唱片机底座 */}
       <div ref={containerRef} className="relative" style={{ width: '80%', aspectRatio: '1' }}>
         {/* 唱片机外框 */}
         <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 rounded-full shadow-2xl border-4 border-gray-700 flex items-center justify-center">
-          {/* 唱片（整面平铺封面） */}
+          {/* 唱片 */}
           <div 
             ref={diskRef}
             className="rounded-full relative overflow-hidden shadow-inner"
@@ -106,14 +113,32 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
               height: '90%',
               transform: `rotate(${rotation}deg)`,
               transition: isPlaying ? 'none' : 'transform 0.5s ease-out',
-              backgroundImage: `url(${coverImage || defaultCover})`,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              backgroundRepeat: 'no-repeat'
+              ...(coverImage ? {
+                backgroundImage: `url(${coverImage})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat'
+              } : {
+                background: 'radial-gradient(circle, #333 0%, #222 30%, #111 70%, #000 100%)'
+              })
             }}
           >
             {/* 中心孔 */}
             <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-gray-800 rounded-full border-2 border-gray-600 shadow-inner" />
+            
+            {/* 调试信息：显示封面图像状态 */}
+            {process.env.NODE_ENV === 'development' && (
+              <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white text-xs p-1 rounded">
+                Cover: {coverImage ? 'Yes' : 'No'}
+              </div>
+            )}
+            
+            {/* 如果没有封面，显示音乐符号 */}
+            {!coverImage && (
+              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-gray-600 text-4xl font-bold">
+                ♪
+              </div>
+            )}
           </div>
         </div>
         

@@ -4,6 +4,10 @@ import VinylPlayer from './VinylPlayer';
 import AudioInfo from './AudioInfo';
 import AudioVisualizer from './AudioVisualizer';
 
+// 导入 Buffer polyfill
+import { Buffer } from 'buffer';
+globalThis.Buffer = Buffer;
+
 interface PlayerState {
   isPlaying: boolean;
   currentTime: number;
@@ -115,14 +119,25 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio) {
+      console.log('音频元素不存在，跳过事件监听器设置');
+      return;
+    }
 
+    console.log('设置音频事件监听器...');
     const updateState = (newState: Partial<PlayerState>) => {
       setPlayerState(prev => ({ ...prev, ...newState }));
       onStateChange(newState);
     };
 
     const handleLoadedMetadata = () => {
+      console.log('🎵 音频元数据已加载，开始提取封面图像...');
+      console.log('音频信息:', { 
+        duration: audio.duration, 
+        src: audio.src,
+        fileBlob: !!fileBlob,
+        fileName: fileName
+      });
       updateState({
         duration: audio.duration,
         currentTime: audio.currentTime,
@@ -131,7 +146,27 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       });
 
       // 尝试提取音频元数据
+      console.log('📥 调用 extractMetadata 函数...');
       extractMetadata(audio);
+    };
+
+    // 添加更多事件监听器来调试
+    const handleLoadStart = () => {
+      console.log('🔊 音频开始加载...');
+    };
+
+    const handleCanPlay = () => {
+      console.log('✅ 音频可以播放');
+    };
+
+    const handlePlay = () => {
+      console.log('▶️ 音频开始播放');
+      updateState({ isPlaying: true });
+    };
+
+    const handlePause = () => {
+      console.log('⏸️ 音频暂停');
+      updateState({ isPlaying: false });
     };
 
     const handleTimeUpdate = () => {
@@ -140,8 +175,6 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       }
     };
 
-    const handlePlay = () => updateState({ isPlaying: true });
-    const handlePause = () => updateState({ isPlaying: false });
     const handleVolumeChange = () => updateState({ volume: audio.volume, muted: audio.muted });
 
     const handleError = () => {
@@ -172,6 +205,9 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       onEnded?.();
     };
 
+    console.log('📞 注册音频事件监听器...');
+    audio.addEventListener('loadstart', handleLoadStart);
+    audio.addEventListener('canplay', handleCanPlay);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('play', handlePlay);
@@ -180,7 +216,25 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     audio.addEventListener('error', handleError);
     audio.addEventListener('ended', handleEnded);
 
+    // 检查音频当前状态
+    console.log('📊 音频当前状态:', {
+      readyState: audio.readyState,
+      networkState: audio.networkState,
+      paused: audio.paused,
+      currentTime: audio.currentTime,
+      duration: audio.duration
+    });
+
+    // 如果音频元数据已经加载完成，立即提取元数据
+    if (audio.readyState >= 1) { // HAVE_METADATA or higher
+      console.log('🚀 音频元数据已就绪，立即提取封面图像...');
+      handleLoadedMetadata();
+    }
+
     return () => {
+      console.log('🧹 清理音频事件监听器...');
+      audio.removeEventListener('loadstart', handleLoadStart);
+      audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('play', handlePlay);
@@ -193,6 +247,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
 
   // 提取音频元数据
   const extractMetadata = async (audio: HTMLAudioElement) => {
+    console.log('extractMetadata 函数开始执行');
     try {
       // 优先解析音频内嵌封面与常用标签
       let coverImage: string | undefined;
@@ -201,6 +256,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       let album = '未知专辑';
 
       console.log('开始解析音频元数据，文件名:', fileName);
+      console.log('可用数据源:', { fileBlob: !!fileBlob, audioSrc: !!audio.src });
 
       // 如果提供了原始文件Blob，优先使用其进行解析
       if (fileBlob) {
@@ -225,26 +281,37 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             const pic = commonFromBlob.picture[0];
             console.log('封面信息:', { format: pic.format, dataLength: pic.data.length });
             
-            const imgBlob = new Blob([pic.data], { type: pic.format || 'image/jpeg' });
-            coverImage = await new Promise<string>((resolve) => {
-              const reader = new FileReader();
-              reader.onload = () => {
-                const result = reader.result as string;
-                console.log('封面转换成功，Data URL长度:', result.length);
-                resolve(result);
-              };
-              reader.onerror = () => {
-                console.error('封面转换失败');
-                resolve(undefined as any);
-              };
-              reader.readAsDataURL(imgBlob);
-            });
+            try {
+              const imgBlob = new Blob([pic.data], { type: pic.format || 'image/jpeg' });
+              coverImage = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  const result = reader.result as string;
+                  console.log('封面转换成功，Data URL长度:', result.length);
+                  console.log('Data URL前缀:', result.substring(0, 100));
+                  resolve(result);
+                };
+                reader.onerror = () => {
+                  console.error('封面转换失败');
+                  resolve(undefined as any);
+                };
+                reader.readAsDataURL(imgBlob);
+              });
+            } catch (error) {
+              console.error('封面图像转换错误:', error);
+              coverImage = undefined;
+            }
           } else {
             console.log('文件中未找到封面图片');
           }
           
-          console.log('设置元数据:', { title, artist, album, hasCover: !!coverImage });
-          setMetadata({ title, artist, album, coverImage });
+          console.log('设置元数据:', { title, artist, album, hasCover: !!coverImage, coverImageLength: coverImage?.length });
+          setMetadata({ 
+            title: title || '', 
+            artist: artist || '', 
+            album: album || '', 
+            coverImage 
+          });
           return; // 已解析完成，提前返回
         } catch (e) {
           console.warn('使用文件Blob解析音频标签失败，回退到audio.src:', e);
@@ -277,38 +344,71 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             const pic = common.picture[0];
             console.log('封面信息:', { format: pic.format, dataLength: pic.data.length });
             
-            const imgBlob = new Blob([pic.data], { type: pic.format || 'image/jpeg' });
-            coverImage = await new Promise<string>((resolve) => {
-              const reader = new FileReader();
-              reader.onload = () => {
-                const result = reader.result as string;
-                console.log('封面转换成功，Data URL长度:', result.length);
-                resolve(result);
-              };
-              reader.onerror = () => {
-                console.error('封面转换失败');
-                resolve(undefined as any);
-              };
-              reader.readAsDataURL(imgBlob);
-            });
+            try {
+              const imgBlob = new Blob([pic.data], { type: pic.format || 'image/jpeg' });
+              coverImage = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                  const result = reader.result as string;
+                  console.log('封面转换成功，Data URL长度:', result.length);
+                  console.log('Data URL前缀:', result.substring(0, 100));
+                  resolve(result);
+                };
+                reader.onerror = () => {
+                  console.error('封面转换失败');
+                  resolve(undefined as any);
+                };
+                reader.readAsDataURL(imgBlob);
+              });
+            } catch (error) {
+              console.error('封面图像转换错误:', error);
+              coverImage = undefined;
+            }
           } else {
             console.log('文件中未找到封面图片');
           }
+          
+          // 在使用audio.src解析成功后立即设置元数据
+          console.log('audio.src解析设置元数据:', { title, artist, album, hasCover: !!coverImage, coverImageLength: coverImage?.length });
+          setMetadata({ 
+            title: title || '', 
+            artist: artist || '', 
+            album: album || '', 
+            coverImage 
+          });
         } catch (e) {
           // 解析失败时回退为文件名解析
           console.warn('音频标签解析失败，使用文件名信息作为替代:', e);
+          
+          // 即使解析失败也要设置默认元数据
+          console.log('回退设置元数据:', { title, artist, album, hasCover: !!coverImage });
+          setMetadata({ 
+            title: title || '', 
+            artist: artist || '', 
+            album: album || '', 
+            coverImage 
+          });
         }
+      } else {
+        // 如果没有audio.src，直接设置默认元数据
+        console.log('直接设置默认元数据:', { title, artist, album, hasCover: !!coverImage });
+        setMetadata({ 
+          title: title || '', 
+          artist: artist || '', 
+          album: album || '', 
+          coverImage 
+        });
       }
-
-      console.log('最终设置元数据:', { title, artist, album, hasCover: !!coverImage });
-      setMetadata({
-        title,
-        artist,
-        album,
-        coverImage,
-      });
     } catch (error) {
       console.error('元数据提取失败:', error);
+      // 即使解析失败也要设置默认元数据
+      console.error('元数据提取失败，设置默认元数据:', error);
+      setMetadata({
+        title: fileName.replace(/\.[^/.]+$/, ''),
+        artist: '未知艺术家',
+        album: '未知专辑',
+        coverImage: undefined,
+      });
     }
   };
 
@@ -432,6 +532,13 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             coverImage={metadata.coverImage}
             buttonElement={middleButtonRef.current}
           />
+          {/* 调试信息：显示封面图像状态 */}
+          {process.env.NODE_ENV === 'development' && (
+            <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-xs p-1 rounded">
+              Cover: {metadata.coverImage ? 'Yes' : 'No'}
+              {metadata.coverImage && ` (${metadata.coverImage.length} chars)`}
+            </div>
+          )}
         </div>
       </div>
       
