@@ -127,7 +127,7 @@ input[type="range"]::-moz-range-thumb {
 
 /* 播放器特定样式 */
 .player-container {
-  background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+  background: transparent;
 }
 
 .control-button {

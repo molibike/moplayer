@@ -283,7 +283,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
 
   return (
     <div 
-      className="control-bar fixed bottom-0 left-0 right-0 bg-black/80 backdrop-blur-md border-t border-gray-700/50 z-40 transition-all duration-300"
+      className="control-bar fixed bottom-0 left-0 right-0 bg-transparent z-40 transition-all duration-300"
       style={{ height: '60px' /* 固定高度，减小50% */ }}
       onMouseEnter={() => setIsVisible(true)}
       onMouseLeave={() => {
@@ -294,7 +294,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
       }}
     >
       {/* 第一行：进度条和音量调节 */}
-      <div className="flex items-center justify-between px-3 py-1 bg-black/80" style={{ height: '30px', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="flex items-center justify-between px-3 py-1" style={{ height: '30px', alignItems: 'center', justifyContent: 'center', background: 'transparent' }}>
 
 
         {/* 左侧：进度条和时间显示 */}
@@ -339,7 +339,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
       </div>
 
       {/* 第二行：播放控制按钮和文件名 */}
-      <div className="flex items-center justify-between px-3 py-1 border-t border-gray-700/30" style={{ alignItems: 'center', justifyContent: 'center', height: '30px' }}>
+      <div className="flex items-center justify-between px-3 py-1 border-t border-gray-700/30" style={{ alignItems: 'center', justifyContent: 'center', height: '30px', background: 'rgba(0, 0, 0, 0.7)' }}>
         {/* 左侧：播放控制按钮 */}
         <div className="flex items-center" style={{ gap: 'clamp(2px, 0.5vw, 4px)' }}>
           <button

@@ -8,24 +8,34 @@ interface MenuBarProps {
 }
 
 interface MenuItem {
-  label: string;
-  action: () => void;
+  label?: string;
+  action?: () => void;
   shortcut?: string;
   disabled?: boolean;
   separator?: boolean;
 }
 
+interface SeparatorItem {
+  separator: true;
+}
 
+interface MenuBarItem {
+  label: string;
+  key: string;
+  isDirectAction?: boolean;
+  action?: () => void;
+  items?: (MenuItem | SeparatorItem)[];
+}
 
 const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlaying = false }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
-  const [isVisible, setIsVisible] = useState(true); // 默认显示
+  const [isVisible, setIsVisible] = useState(true);
   const menuRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<NodeJS.Timeout>();
   const mouseMoveTimeoutRef = useRef<NodeJS.Timeout>();
 
-  // 简化的菜单结构，打开菜单直接触发，帮助菜单保持下拉
-  const menuItems = [
+  // 简化的菜单结构
+  const menuItems: MenuBarItem[] = [
     {
       label: '打开',
       key: 'open',
@@ -36,36 +46,47 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       label: '帮助',
       key: 'help',
       items: [
-        { label: '支持格式', action: async () => {
-          try {
-            const dialogMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
-            await message(dialogMessage, { title: '支持格式', kind: 'info' });
-          } catch (error) {
-            console.error('显示支持格式对话框失败:', error);
-            // 降级到浏览器alert
-            const alertMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
-            alert(alertMessage);
+        { 
+          label: '支持格式', 
+          action: async () => {
+            console.log('支持格式菜单项被点击');
+            try {
+              const dialogMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
+              console.log('尝试显示支持格式对话框');
+              await message(dialogMessage, { title: '支持格式', kind: 'info' });
+              console.log('支持格式对话框显示成功');
+            } catch (error) {
+              console.error('显示支持格式对话框失败:', error);
+              const alertMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
+              console.log('使用浏览器alert显示支持格式');
+              alert(alertMessage);
+            }
           }
-        }},
+        },
         { separator: true },
-        { label: '关于 MoPlayer', action: async () => {
-          try {
-            const aboutMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
-            await message(aboutMessage, { title: '关于 MoPlayer', kind: 'info' });
-          } catch (error) {
-            console.error('显示关于对话框失败:', error);
-            // 降级到浏览器alert
-            const alertMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
-            alert(alertMessage);
-          }
-        } },
-      ] as MenuItem[]
+        { 
+          label: '关于 MoPlayer', 
+          action: async () => {
+            console.log('关于菜单项被点击');
+            try {
+              const aboutMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
+              console.log('尝试显示关于对话框');
+              await message(aboutMessage, { title: '关于 MoPlayer', kind: 'info' });
+              console.log('关于对话框显示成功');
+            } catch (error) {
+              console.error('显示关于对话框失败:', error);
+              const alertMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
+              console.log('使用浏览器alert显示关于信息');
+              alert(alertMessage);
+            }
+          } 
+        },
+      ]
     }
   ];
 
-  // 菜单栏显示逻辑 - 初始窗口始终显示，仅视频播放时才能隐藏
+  // 菜单栏显示逻辑
   useEffect(() => {
-    // 如果没有播放文件，菜单栏始终显示，不应用任何隐藏逻辑
     if (!isPlaying) {
       setIsVisible(true);
       if (timeoutRef.current) {
@@ -77,7 +98,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       return;
     }
 
-    // 只有在播放时才应用隐藏逻辑
     const handleMouseMove = () => {
       setIsVisible(true);
       if (timeoutRef.current) {
@@ -87,7 +107,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
         clearTimeout(mouseMoveTimeoutRef.current);
       }
       
-      // 鼠标静止5秒后隐藏
       mouseMoveTimeoutRef.current = setTimeout(() => {
         setIsVisible(false);
         setActiveMenu(null);
@@ -116,11 +135,9 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
     };
   }, [isPlaying]);
 
-  // 确保初始窗口下菜单栏始终显示，不受鼠标事件影响
   useEffect(() => {
     if (!isPlaying) {
       setIsVisible(true);
-      // 清除所有隐藏定时器
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
@@ -131,18 +148,20 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
   }, [isPlaying]);
 
   const handleMenuClick = (key: string) => {
+    console.log(`菜单项 ${key} 被点击`);
     const menu = menuItems.find(m => m.key === key);
-    if (menu && (menu as any).isDirectAction) {
-      // 直接执行操作
-      (menu as any).action();
-      setActiveMenu(null); // 关闭所有菜单
+    if (menu && menu.isDirectAction) {
+      if (menu.action) {
+        menu.action();
+      }
+      setActiveMenu(null);
     } else {
-      // 切换下拉菜单
       setActiveMenu(activeMenu === key ? null : key);
     }
   };
 
   const handleMenuItemClick = (action: () => void) => {
+    console.log('菜单子项被点击，准备执行操作');
     action();
     setActiveMenu(null);
   };
@@ -182,7 +201,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
     }
   };
 
-  // 点击外部关闭菜单
   const handleClickOutside = (e: MouseEvent) => {
     if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
       setActiveMenu(null);
@@ -190,7 +208,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
   };
 
   useEffect(() => {
-    // 只有在有活动菜单时才添加事件监听器
     if (activeMenu) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => {
@@ -207,14 +224,12 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       className="menu-bar bg-gray-900/95 backdrop-blur-md border-b border-gray-700/50 text-white fixed top-0 left-0 right-0 z-50 transition-all duration-300"
       onMouseEnter={() => setIsVisible(true)}
       onMouseLeave={() => {
-        // 只有在播放时才允许隐藏
         if (isPlaying) {
           setIsVisible(false);
         }
       }}
     >
       <div className="flex justify-between items-center h-10">
-        {/* 左侧程序名称和菜单项 */}
         <div className="flex items-center">
           <div className="px-4">
             <span className="text-sm font-semibold text-gray-200">MoPlayer</span>
@@ -230,13 +245,13 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
                 {menu.label}
               </button>
               
-              {activeMenu === menu.key && (menu as any).items && (
+              {activeMenu === menu.key && menu.items && (
                 <div 
                   className="menu-dropdown absolute top-full left-0 bg-gray-900/95 backdrop-blur-md border border-gray-700/50 shadow-xl min-w-48 z-50 rounded-b-md mt-1"
                   onMouseEnter={() => setIsVisible(true)}
                 >
-                  {(menu as any).items.map((item: MenuItem, index: number) => (
-                    item.separator ? (
+                  {menu.items.map((item, index: number) => (
+                    'separator' in item ? (
                       <div key={index} className="border-t border-gray-700/50 my-1" />
                     ) : (
                       <button
@@ -244,7 +259,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
                         className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-700/50 transition-colors flex justify-between items-center ${
                           item.disabled ? 'text-gray-500 cursor-not-allowed' : ''
                         }`}
-                        onClick={() => !item.disabled && handleMenuItemClick(item.action)}
+                        onClick={() => !item.disabled && item.action && handleMenuItemClick(item.action)}
                         disabled={item.disabled}
                       >
                         <span>{item.label}</span>
@@ -261,7 +276,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
           </div>
         </div>
 
-        {/* 右侧窗口控制按钮 */}
         <div className="flex">
           <button
             className="px-4 py-2 hover:bg-gray-700/50 transition-colors text-sm"

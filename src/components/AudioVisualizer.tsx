@@ -28,8 +28,8 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       if (!container) return;
       
       const rect = container.getBoundingClientRect();
-      // 确保获取准确的容器宽度，减去任何可能的边距
-      const newWidth = Math.max(Math.floor(rect.width), 800); // 最小宽度800px
+      // 音波区宽度 = 程序窗口总宽度 * 61%
+      const newWidth = Math.max(Math.floor(rect.width * 0.61), 800); // 最小宽度800px
       const newHeight = Math.max(Math.floor(rect.height), height || 200);
       
       setCanvasSize({ width: newWidth, height: newHeight });
@@ -121,7 +121,8 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     for (let i = 0; i < barCount; i++) {
       // 从频率数据中采样
       const dataIndex = Math.floor((i / barCount) * dataArray.length);
-      const barHeight = (dataArray[dataIndex] / 255) * canvas.height;
+      // 确保音波条最低绘制高度为5像素
+      const barHeight = Math.max((dataArray[dataIndex] / 255) * canvas.height, 5);
       
       // 计算颜色（基于频率强度）
       const intensity = dataArray[dataIndex] / 255;
@@ -179,7 +180,8 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       const frequency = (i / barCount) * 10;
       const amplitude = Math.sin(time + frequency) * 0.5 + 0.5;
       const noise = Math.random() * 0.3;
-      const barHeight = (amplitude + noise) * canvas.height * 0.8;
+      // 确保音波条最低绘制高度为5像素
+      const barHeight = Math.max((amplitude + noise) * canvas.height * 0.8, 5);
       
       const x = i * barWidth;
       const y = canvas.height - barHeight;
