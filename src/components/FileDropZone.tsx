@@ -23,12 +23,22 @@ const FileDropZone: React.FC<FileDropZoneProps> = ({ onFileSelect, onFileSelectC
     setIsDragOver(false);
     
     const files = Array.from(e.dataTransfer.files);
-    const videoFile = files.find(file => 
-      file.type.startsWith('video/') || file.type.startsWith('audio/')
-    );
+    console.log('拖拽的文件列表:', files.map(f => ({ name: f.name, type: f.type })));
     
-    if (videoFile) {
-      onFileSelect(videoFile);
+    // 支持视频和音频文件
+    const mediaFile = files.find(file => {
+      const isVideo = file.type.startsWith('video/');
+      const isAudio = file.type.startsWith('audio/');
+      const hasMediaExtension = /\.(mp4|webm|ogv|mp3|wav|ogg|aac|flac|m4a|wma)$/i.test(file.name);
+      
+      return isVideo || isAudio || hasMediaExtension;
+    });
+    
+    if (mediaFile) {
+      console.log('选择的媒体文件:', mediaFile.name, mediaFile.type);
+      onFileSelect(mediaFile);
+    } else {
+      console.log('未找到支持的媒体文件');
     }
   }, [onFileSelect]);
 

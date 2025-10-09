@@ -15,6 +15,8 @@ interface MenuItem {
   separator?: boolean;
 }
 
+
+
 const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlaying = false }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(true); // 默认显示
@@ -36,21 +38,25 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       items: [
         { label: '支持格式', action: async () => {
           try {
-            await message('支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)', { title: '支持格式', kind: 'info' });
+            const dialogMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
+            await message(dialogMessage, { title: '支持格式', kind: 'info' });
           } catch (error) {
             console.error('显示支持格式对话框失败:', error);
             // 降级到浏览器alert
-            alert('支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)');
+            const alertMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
+            alert(alertMessage);
           }
         }},
         { separator: true },
         { label: '关于 MoPlayer', action: async () => {
           try {
-            await message('MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持', { title: '关于 MoPlayer', kind: 'info' });
+            const aboutMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
+            await message(aboutMessage, { title: '关于 MoPlayer', kind: 'info' });
           } catch (error) {
             console.error('显示关于对话框失败:', error);
             // 降级到浏览器alert
-            alert('MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持');
+            const alertMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
+            alert(alertMessage);
           }
         } },
       ] as MenuItem[]
@@ -129,6 +135,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
     if (menu && (menu as any).isDirectAction) {
       // 直接执行操作
       (menu as any).action();
+      setActiveMenu(null); // 关闭所有菜单
     } else {
       // 切换下拉菜单
       setActiveMenu(activeMenu === key ? null : key);

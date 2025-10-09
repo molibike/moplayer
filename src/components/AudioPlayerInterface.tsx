@@ -3,6 +3,7 @@ import * as mm from 'music-metadata-browser';
 import VinylPlayer from './VinylPlayer';
 import AudioInfo from './AudioInfo';
 import AudioVisualizer from './AudioVisualizer';
+import VinylPlayerButtons from './VinylPlayerButtons';
 
 // 导入 Buffer polyfill
 import { Buffer } from 'buffer';
@@ -282,7 +283,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             console.log('封面信息:', { format: pic.format, dataLength: pic.data.length });
             
             try {
-              const imgBlob = new Blob([pic.data], { type: pic.format || 'image/jpeg' });
+              const imgBlob = new Blob([new Uint8Array(pic.data)], { type: pic.format || 'image/jpeg' });
               coverImage = await new Promise<string>((resolve) => {
                 const reader = new FileReader();
                 reader.onload = () => {
@@ -345,7 +346,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             console.log('封面信息:', { format: pic.format, dataLength: pic.data.length });
             
             try {
-              const imgBlob = new Blob([pic.data], { type: pic.format || 'image/jpeg' });
+              const imgBlob = new Blob([new Uint8Array(pic.data)], { type: pic.format || 'image/jpeg' });
               coverImage = await new Promise<string>((resolve) => {
                 const reader = new FileReader();
                 reader.onload = () => {
@@ -497,7 +498,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   }, [handlePlayPause, handleVolumeUp, handleVolumeDown, handleMute, handleSeekForward, handleSeekBackward, handleSeek]);
 
   return (
-    <div className="relative bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex-1 flex w-full h-full border-5 border-gray-700 cursor-pointer"
+    <div className="relative bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex-1 flex w-full h-full border-5 border-gray-700"
          style={{ border: '5px solid #374151' }}
          onClick={handlePlayPause}>
       {/* 隐藏的音频元素 */}
@@ -510,20 +511,10 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       
       {/* 左侧：唱片播放机区域 - 38% 宽度 */}
       <div className="h-full flex flex-col" style={{ width: '38%' }}>
-        {/* 顶部：唱片机按钮区域 */}
-        <div className="flex justify-center items-center space-x-4 relative" style={{ height: '60px', marginTop: '30px' }}>
-          <div className="w-12 h-12 bg-gray-700 border-2 border-gray-500 rounded-lg flex items-center justify-center cursor-pointer hover:bg-gray-600 transition-colors">
-            <div className="w-6 h-6 bg-gray-400 rounded-sm"></div>
-          </div>
-          <div ref={middleButtonRef} className="w-12 h-12 bg-gray-700 border-2 border-gray-500 rounded-lg flex items-center justify-center cursor-pointer hover:bg-gray-600 transition-colors relative">
-            <div className="w-6 h-6 bg-green-400 rounded-sm"></div>
-            {/* 连接点 */}
-            <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-gray-300 rounded-full border border-gray-500"></div>
-          </div>
-          <div className="w-12 h-12 bg-gray-700 border-2 border-gray-500 rounded-lg flex items-center justify-center cursor-pointer hover:bg-gray-600 transition-colors">
-            <div className="w-6 h-6 bg-gray-400 rounded-sm"></div>
-          </div>
-        </div>
+        {/* 唱片机按钮区域 - 动态尺寸 */}
+        <VinylPlayerButtons 
+          middleButtonRef={middleButtonRef}
+        />
         
         {/* 唱片区域：底对齐 */}
         <div className="flex-1 flex items-end justify-center" style={{ paddingBottom: '10px' }}>

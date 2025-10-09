@@ -56,7 +56,7 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
       const cx = dr.left + dr.width / 2;
       const cy = dr.top + dr.height / 2;
       const R = dr.width / 2;
-      const targetR = R * 0.7; // 半径的70%（从中心向右偏移）
+      const targetR = R * 0.5; // 半径的50%（从中心向右偏移）
 
       // 唱针位置：中心向右偏移 targetR（视口坐标）
       const sx = cx + targetR;

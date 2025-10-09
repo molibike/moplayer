@@ -79,6 +79,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     return false;
   };
 
+  // 判断当前文件是否为音频
   const isAudio = isAudioFile(src, fileName, fileBlob);
 
   // 处理src变化时的状态重置
@@ -94,6 +95,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
       setPlayerState(prev => ({ 
         ...prev, 
         currentTime: 0, 
+        duration: 0,
         isPlaying: false 
       }));
     };
@@ -202,13 +204,6 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     };
   }, [onStateChange, onError, isDragging, onEnded]);
 
-  // 格式化时间函数（暂时未使用）
-  // const formatTime = (time: number) => {
-  //   const minutes = Math.floor(time / 60);
-  //   const seconds = Math.floor(time % 60);
-  //   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  // };
-
   const handlePlayPause = useCallback(() => {
     const video = videoRef.current;
     if (!video) {
@@ -291,26 +286,6 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
       video.currentTime = clamped;
     };
   }, [handlePlayPause, handleVolumeUp, handleVolumeDown, handleMute, handleSeekForward, handleSeekBackward, isAudio]);
-
-  // 进度条拖拽处理函数（暂时未使用）
-  // const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-  //   const video = videoRef.current;
-  //   if (!video) return;
-    
-  //   const time = parseFloat(e.target.value);
-  //   video.currentTime = time;
-  //   setPlayerState(prev => ({ ...prev, currentTime: time }));
-  // };
-
-  // 音量控制函数（暂时未使用）
-  // const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-  //   const video = videoRef.current;
-  //   if (!video) return;
-    
-  //   const volume = parseFloat(e.target.value);
-  //   video.volume = volume;
-  //   video.muted = volume === 0;
-  // };
 
   // 如果是音频文件，使用音频播放界面
   if (isAudio) {

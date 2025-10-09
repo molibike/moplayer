@@ -98,7 +98,11 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     if (!ctx) return;
 
     // 获取音频数据
-    analyser.getByteFrequencyData(dataArray);
+    if (dataArray) {
+      const tempArray = new Uint8Array(dataArray.length);
+      analyser.getByteFrequencyData(tempArray);
+      dataArray.set(tempArray);
+    }
 
     // 清空画布
     ctx.clearRect(0, 0, canvas.width, canvas.height);

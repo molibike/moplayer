@@ -25,6 +25,8 @@ interface ControlBarProps {
   onSeekTo?: (time: number) => void;
   playMode: 'sequential' | 'single' | 'list' | 'random';
   onTogglePlayMode: () => void;
+  playlistViewMode: 'all' | 'audio' | 'video';
+  setPlaylistViewMode: (mode: 'all' | 'audio' | 'video') => void;
 }
 
 const ControlBar: React.FC<ControlBarProps> = ({
@@ -45,6 +47,8 @@ const ControlBar: React.FC<ControlBarProps> = ({
   onSeekTo,
   playMode,
   onTogglePlayMode,
+  playlistViewMode,
+  setPlaylistViewMode,
 }) => {
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
@@ -53,6 +57,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
   const [volumeBeforeMute, setVolumeBeforeMute] = useState(100);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+
   const playlistRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<NodeJS.Timeout>();
   const mouseMoveTimeoutRef = useRef<NodeJS.Timeout>();
@@ -83,35 +88,41 @@ const ControlBar: React.FC<ControlBarProps> = ({
            /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/i.test(file.name);
   };
 
-  // 获取当前播放项的媒体类型
-  const getCurrentMediaType = () => {
-    if (currentIndex >= 0 && currentIndex < playlist.length) {
-      const currentFile = playlist[currentIndex].file;
-      if (isAudioFile(currentFile)) return 'audio';
-      if (isVideoFile(currentFile)) return 'video';
-    }
-    return 'unknown';
+
+
+  // 根据播放列表显示模式过滤列表
+  // const currentMediaType = getCurrentMediaType(); // 保留用于其他用途
+  const filteredPlaylist = playlist.filter(item => {
+    if (playlistViewMode === 'audio') return isAudioFile(item.file);
+    if (playlistViewMode === 'video') return isVideoFile(item.file);
+    return true; // 'all' 模式显示所有项目
+  });
+
+  // 切换播放列表显示模式
+  const togglePlaylistViewMode = () => {
+    const modes: ('all' | 'audio' | 'video')[] = ['all', 'audio', 'video'];
+    const currentIndex = modes.indexOf(playlistViewMode);
+    const nextIndex = (currentIndex + 1) % modes.length;
+    setPlaylistViewMode(modes[nextIndex]);
   };
 
-  // 根据当前媒体类型过滤播放列表
-  const currentMediaType = getCurrentMediaType();
-  const filteredPlaylist = playlist.filter(item => {
-    if (currentMediaType === 'audio') return isAudioFile(item.file);
-    if (currentMediaType === 'video') return isVideoFile(item.file);
-    return true; // 如果类型未知，显示所有项目
-  });
+  const playlistViewModeLabels = {
+    all: '全部',
+    audio: '音频',
+    video: '视频'
+  };
 
   // 创建原始索引映射
   const originalIndexMap = new Map<number, number>();
   let filteredIndex = 0;
   playlist.forEach((item, originalIndex) => {
-    if (currentMediaType === 'audio' && isAudioFile(item.file)) {
+    if (playlistViewMode === 'audio' && isAudioFile(item.file)) {
       originalIndexMap.set(filteredIndex, originalIndex);
       filteredIndex++;
-    } else if (currentMediaType === 'video' && isVideoFile(item.file)) {
+    } else if (playlistViewMode === 'video' && isVideoFile(item.file)) {
       originalIndexMap.set(filteredIndex, originalIndex);
       filteredIndex++;
-    } else if (currentMediaType === 'unknown') {
+    } else if (playlistViewMode === 'all') {
       originalIndexMap.set(filteredIndex, originalIndex);
       filteredIndex++;
     }
@@ -218,22 +229,30 @@ const ControlBar: React.FC<ControlBarProps> = ({
     if (newVolume > 0 && isMuted) {
       setIsMuted(false);
     }
-    // 这里可以添加实际的音量控制逻辑
+    // 同时控制video和audio元素的音量
     const videoElement = document.querySelector('video');
+    const audioElement = document.querySelector('audio');
     if (videoElement) {
       videoElement.volume = newVolume / 100;
+    }
+    if (audioElement) {
+      audioElement.volume = newVolume / 100;
     }
   };
 
   // 静音切换功能
   const handleMuteToggle = () => {
     const videoElement = document.querySelector('video');
+    const audioElement = document.querySelector('audio');
     if (isMuted) {
       // 取消静音，恢复之前的音量
       setIsMuted(false);
       setVolume(volumeBeforeMute);
       if (videoElement) {
         videoElement.volume = volumeBeforeMute / 100;
+      }
+      if (audioElement) {
+        audioElement.volume = volumeBeforeMute / 100;
       }
     } else {
       // 静音，保存当前音量
@@ -243,10 +262,11 @@ const ControlBar: React.FC<ControlBarProps> = ({
       if (videoElement) {
         videoElement.volume = 0;
       }
+      if (audioElement) {
+        audioElement.volume = 0;
+      }
     }
   };
-
-
 
   // 获取当前文件名
   const getCurrentFileName = () => {
@@ -479,9 +499,20 @@ const ControlBar: React.FC<ControlBarProps> = ({
               <div className="p-2 border-b border-gray-700/50 flex items-center justify-between">
                 <div className="text-sm font-semibold">
                   播放列表 ({filteredPlaylist.length}
-                  {currentMediaType !== 'unknown' && ` ${currentMediaType === 'audio' ? '音频' : '视频'}`})
+                  {playlistViewMode !== 'all' && ` ${playlistViewModeLabels[playlistViewMode]}`})
                 </div>
                 <div className="flex items-center space-x-2">
+                  {/* 列表类型切换按钮 */}
+                  <button
+                    onClick={togglePlaylistViewMode}
+                    className="px-2 py-1 bg-purple-600/50 hover:bg-purple-500/50 text-white text-xs rounded flex items-center space-x-1 transition-colors"
+                    title={`当前显示: ${playlistViewModeLabels[playlistViewMode]}`}
+                  >
+                    <span className="text-sm">
+                      {playlistViewMode === 'all' ? '📋' : playlistViewMode === 'audio' ? '🎵' : '🎬'}
+                    </span>
+                    <span>{playlistViewModeLabels[playlistViewMode]}</span>
+                  </button>
                   {/* 播放模式切换按钮 */}
                   <button
                     onClick={onTogglePlayMode}
@@ -516,7 +547,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
               
               {filteredPlaylist.length === 0 ? (
                 <div className="p-4 text-center text-gray-400 text-sm">
-                  {playlist.length === 0 ? '播放列表为空' : `当前${currentMediaType === 'audio' ? '音频' : '视频'}列表为空`}
+                  {playlist.length === 0 ? '播放列表为空' : `当前${playlistViewModeLabels[playlistViewMode]}列表为空`}
                   <div className="mt-2 text-xs">拖拽文件到此处添加</div>
                 </div>
               ) : (

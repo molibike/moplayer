@@ -36,6 +36,7 @@ function App() {
   const [error, setError] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
   const [playMode, setPlayMode] = useState<PlayMode>('sequential');
+  const [playlistViewMode, setPlaylistViewMode] = useState<'all' | 'audio' | 'video'>('all');
 
   // 播放器方法引用
   const playPauseRef = useRef<(() => void) | null>(null);
@@ -58,6 +59,10 @@ function App() {
         const item = playlist[currentPlaylistIndex];
         setVideoSrc(item.url);
         setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
+        // 延迟播放以确保状态重置完成
+        setTimeout(() => {
+          playPauseRef.current?.();
+        }, 100);
         break;
       }
       case 'list': {
@@ -104,7 +109,7 @@ function App() {
             handlePlaylistItemClick(nextOriginalIndex);
           }
         } else {
-          // 停止
+          // 停止播放
           setPlayerState(prev => ({ ...prev, isPlaying: false }));
         }
         break;
@@ -604,6 +609,8 @@ function App() {
                 }
               });
             }}
+            playlistViewMode={playlistViewMode}
+            setPlaylistViewMode={setPlaylistViewMode}
           />
         )}
 
