@@ -8,23 +8,17 @@ interface MenuBarProps {
 }
 
 interface MenuItem {
-  label?: string;
-  action?: () => void;
-  shortcut?: string;
-  disabled?: boolean;
-  separator?: boolean;
-}
-
-interface SeparatorItem {
-  separator: true;
-}
-
-interface MenuBarItem {
   label: string;
   key: string;
   isDirectAction?: boolean;
   action?: () => void;
+  shortcut?: string;
+  disabled?: boolean;
   items?: (MenuItem | SeparatorItem)[];
+}
+
+interface SeparatorItem {
+  separator: true;
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlaying = false }) => {
@@ -35,7 +29,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
   const mouseMoveTimeoutRef = useRef<NodeJS.Timeout>();
 
   // 简化的菜单结构
-  const menuItems: MenuBarItem[] = [
+  const menuItems: MenuItem[] = [
     {
       label: '打开',
       key: 'open',
@@ -47,13 +41,14 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       key: 'help',
       items: [
         { 
-          label: '支持格式', 
+          label: '支持格式',
+          key: 'supported-formats',
           action: async () => {
             console.log('支持格式菜单项被点击');
             try {
               const dialogMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
               console.log('尝试显示支持格式对话框');
-              await message(dialogMessage, { title: '支持格式', kind: 'info' });
+              await message(dialogMessage, { kind: 'info' });
               console.log('支持格式对话框显示成功');
             } catch (error) {
               console.error('显示支持格式对话框失败:', error);
@@ -65,13 +60,14 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
         },
         { separator: true },
         { 
-          label: '关于 MoPlayer', 
+          label: '关于 MoPlayer',
+          key: 'about',
           action: async () => {
             console.log('关于菜单项被点击');
             try {
               const aboutMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
               console.log('尝试显示关于对话框');
-              await message(aboutMessage, { title: '关于 MoPlayer', kind: 'info' });
+              await message(aboutMessage, { kind: 'info' });
               console.log('关于对话框显示成功');
             } catch (error) {
               console.error('显示关于对话框失败:', error);

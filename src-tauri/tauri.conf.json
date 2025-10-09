@@ -46,11 +46,15 @@
             "core:window:allow-hide",
             "fs:default",
             "fs:allow-read-file",
-            "fs:allow-exists"
+            "fs:allow-exists",
+            "dialog:allow-message"
           ]
         }
       ]
     }
+  },
+  "plugins": {
+    "dialog": null
   },
   "bundle": {
     "active": true,
@@ -71,6 +75,5 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": ""
     }
-  },
-  "plugins": {}
+  }
 }
