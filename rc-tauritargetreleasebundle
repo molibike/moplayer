@@ -1,5 +1,4 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { message } from '@tauri-apps/plugin-dialog';
 
 interface MenuBarProps {
   onOpenFile: () => void;
@@ -34,24 +33,12 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       label: '帮助',
       key: 'help',
       items: [
-        { label: '支持格式', action: async () => {
-          try {
-            await message('支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)', { title: '支持格式', kind: 'info' });
-          } catch (error) {
-            console.error('显示支持格式对话框失败:', error);
-            // 降级到浏览器alert
-            alert('支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)');
-          }
+        { label: '支持格式', action: () => {
+          alert('支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)');
         }},
         { separator: true },
-        { label: '关于 MoPlayer', action: async () => {
-          try {
-            await message('MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持', { title: '关于 MoPlayer', kind: 'info' });
-          } catch (error) {
-            console.error('显示关于对话框失败:', error);
-            // 降级到浏览器alert
-            alert('MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持');
-          }
+        { label: '关于 MoPlayer', action: () => {
+          alert('MoPlayer是一个多功能音视频播放器，当前版本：0.1.0');
         } },
       ] as MenuItem[]
     }

@@ -524,7 +524,8 @@ function App() {
         
         if (mediaFiles.length > 0) {
           console.log('拖拽文件:', mediaFiles.map(f => f.name));
-          handleFilesAdd(mediaFiles);
+          // 拖拽文件时立即播放第一个文件，相当于"打开"菜单功能
+          handleFileSelect(mediaFiles[0]);
         } else {
           console.log('没有找到支持的媒体文件');
           setError('请拖拽音频或视频文件');

@@ -52,6 +52,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [volumeBeforeMute, setVolumeBeforeMute] = useState(100);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
+  const [windowHeight, setWindowHeight] = useState(window.innerHeight);
   const playlistRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<NodeJS.Timeout>();
   const mouseMoveTimeoutRef = useRef<NodeJS.Timeout>();
@@ -170,6 +171,18 @@ const ControlBar: React.FC<ControlBarProps> = ({
       }
     };
   }, [isPlaying]);
+
+  // 监听窗口大小变化，动态调整播放列表高度
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowHeight(window.innerHeight);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
 
   // 格式化时间显示
   const formatTime = (seconds: number) => {
@@ -459,7 +472,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
               style={{
                 minWidth: '256px',
                 maxWidth: '38vw',
-                maxHeight: '100vh',
+                maxHeight: `${windowHeight * 0.8}px`,
                 width: 'clamp(256px, 38vw, 600px)'
               }}
             >
