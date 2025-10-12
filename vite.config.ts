@@ -12,6 +12,13 @@ export default defineConfig({
     target: process.env.TAURI_PLATFORM == 'windows' ? 'chrome105' : 'safari13',
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+    rollupOptions: {
+      external: [
+        '@tauri-apps/api',
+        '@tauri-apps/api/tauri',
+        '@tauri-apps/api/window'
+      ]
+    }
   },
   define: {
     global: 'globalThis',
@@ -27,5 +34,6 @@ export default defineConfig({
         global: 'globalThis',
       },
     },
+    exclude: ['@tauri-apps/api']
   },
 })

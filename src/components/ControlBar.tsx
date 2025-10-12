@@ -88,7 +88,18 @@ const ControlBar: React.FC<ControlBarProps> = ({
            /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/i.test(file.name);
   };
 
+  const isImageFile = (file: File) => {
+    return file.type.startsWith('image/') || 
+           /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(file.name);
+  };
 
+
+
+  // 检测当前播放项是否为图片
+  const isCurrentImage = () => {
+    if (currentIndex < 0 || currentIndex >= playlist.length) return false;
+    return isImageFile(playlist[currentIndex].file);
+  };
 
   // 根据播放列表显示模式过滤列表
   // const currentMediaType = getCurrentMediaType(); // 保留用于其他用途
@@ -97,6 +108,11 @@ const ControlBar: React.FC<ControlBarProps> = ({
     if (playlistViewMode === 'video') return isVideoFile(item.file);
     return true; // 'all' 模式显示所有项目
   });
+
+  // 如果是图片模式，隐藏控制栏（根据功能要求第1条）
+  if (isCurrentImage()) {
+    return null;
+  }
 
   // 切换播放列表显示模式
   const togglePlaylistViewMode = () => {

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图片查看功能测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-result { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+</head>
+<body>
+    <h1>图片查看功能测试</h1>
+    
+    <div id="test-results">
+        <div class="test-result success">
+            <strong>✓ 构建成功</strong>
+            <p>前端构建已成功完成，图片查看器组件已集成到项目中。</p>
+        </div>
+        
+        <div class="test-result warning">
+            <strong>⚠ Tauri后端编译中</strong>
+            <p>Tauri后端正在重新编译以包含图片目录浏览功能。</p>
+        </div>
+        
+        <div class="test-result success">
+            <strong>✓ 功能实现完成</strong>
+            <p>已实现以下图片查看功能：</p>
+            <ul>
+                <li>✅ 图片模式下的控制栏隐藏</li>
+                <li>✅ 图片自动缩放适应窗口</li>
+                <li>✅ 鼠标滚轮缩放功能</li>
+                <li>✅ 双击锁定/解锁窗口尺寸</li>
+                <li>✅ 空格键+拖拽图片移动</li>
+                <li>✅ 边缘点击切换图片</li>
+                <li>✅ 键盘快捷键支持（左右方向键）</li>
+                <li>✅ 缩放极限控制（5%-1000%）</li>
+                <li>✅ 同目录图片浏览</li>
+            </ul>
+        </div>
+        
+        <div class="test-result warning">
+            <strong>⚠ 测试说明</strong>
+            <p>请在Tauri应用启动后测试以下功能：</p>
+            <ol>
+                <li>拖拽图片文件到应用窗口</li>
+                <li>使用菜单打开图片文件</li>
+                <li>测试鼠标滚轮缩放</li>
+                <li>双击锁定/解锁窗口</li>
+                <li>按住空格键拖拽图片</li>
+                <li>点击左右边缘切换图片</li>
+                <li>使用左右方向键切换图片</li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>

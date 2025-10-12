@@ -46,13 +46,13 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
           action: async () => {
             console.log('支持格式菜单项被点击');
             try {
-              const dialogMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
+              const dialogMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)\n\n支持的图片格式：\n\n• JPG (.jpg, .jpeg)\n• PNG (.png)\n• GIF (.gif)\n• BMP (.bmp)\n• WebP (.webp)\n• SVG (.svg)\n• ICO (.ico)';
               console.log('尝试显示支持格式对话框');
               await message(dialogMessage, { kind: 'info' });
               console.log('支持格式对话框显示成功');
             } catch (error) {
               console.error('显示支持格式对话框失败:', error);
-              const alertMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)';
+              const alertMessage = '支持的视频格式：\n\n• MP4 (.mp4)\n• AVI (.avi)\n• MOV (.mov)\n• WMV (.wmv)\n• FLV (.flv)\n• MKV (.mkv)\n• WEBM (.webm)\n• OGV (.ogv)\n• 3GP (.3gp)\n• M4V (.m4v)\n\n支持的音频格式：\n\n• MP3 (.mp3)\n• WAV (.wav)\n• AAC (.aac)\n• OGG (.ogg)\n• FLAC (.flac)\n• M4A (.m4a)\n• WMA (.wma)\n\n支持的图片格式：\n\n• JPG (.jpg, .jpeg)\n• PNG (.png)\n• GIF (.gif)\n• BMP (.bmp)\n• WebP (.webp)\n• SVG (.svg)\n• ICO (.ico)';
               console.log('使用浏览器alert显示支持格式');
               alert(alertMessage);
             }

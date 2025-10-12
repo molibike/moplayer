@@ -25,13 +25,14 @@ const FileDropZone: React.FC<FileDropZoneProps> = ({ onFileSelect, onFileSelectC
     const files = Array.from(e.dataTransfer.files);
     console.log('拖拽的文件列表:', files.map(f => ({ name: f.name, type: f.type })));
     
-    // 支持视频和音频文件
+    // 支持视频、音频和图片文件
     const mediaFile = files.find(file => {
       const isVideo = file.type.startsWith('video/');
       const isAudio = file.type.startsWith('audio/');
-      const hasMediaExtension = /\.(mp4|webm|ogv|mp3|wav|ogg|aac|flac|m4a|wma)$/i.test(file.name);
+      const isImage = file.type.startsWith('image/');
+      const hasMediaExtension = /\.(mp4|webm|ogv|mp3|wav|ogg|aac|flac|m4a|wma|jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(file.name);
       
-      return isVideo || isAudio || hasMediaExtension;
+      return isVideo || isAudio || isImage || hasMediaExtension;
     });
     
     if (mediaFile) {
@@ -64,7 +65,7 @@ const FileDropZone: React.FC<FileDropZoneProps> = ({ onFileSelect, onFileSelectC
             拖拽文件到此处播放
           </h3>
           <p className="text-gray-500 text-sm">
-            支持 MP4, WebM, OGV, MP3, WAV, OGG 等格式
+            支持 MP4, WebM, OGV, MP3, WAV, OGG, JPG, PNG, GIF 等格式
           </p>
         </div>
         <button 

@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import AudioPlayerInterface from './AudioPlayerInterface';
+import ImageViewer from './ImageViewer';
 
 interface PlayerState {
   isPlaying: boolean;
@@ -79,8 +80,38 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     return false;
   };
 
-  // 判断当前文件是否为音频
+  // 检测是否为图片文件
+  const isImageFile = (src: string, fileName?: string, fileBlob?: File): boolean => {
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.ico'];
+    const imageMimePrefix = 'image/';
+    
+    // 先检查文件Blob的MIME
+    if (fileBlob && typeof fileBlob.type === 'string') {
+      if (fileBlob.type.startsWith(imageMimePrefix)) {
+        return true;
+      }
+    }
+
+    // 首先检查文件名扩展名
+    if (fileName) {
+      const extension = fileName.toLowerCase().substring(fileName.lastIndexOf('.'));
+      if (imageExtensions.includes(extension)) {
+        return true;
+      }
+    }
+    
+    // 检查src中的扩展名
+    const srcExtension = src.toLowerCase().substring(src.lastIndexOf('.'));
+    if (imageExtensions.includes(srcExtension)) {
+      return true;
+    }
+    
+    return false;
+  };
+
+  // 判断当前文件类型
   const isAudio = isAudioFile(src, fileName, fileBlob);
+  const isImage = isImageFile(src, fileName, fileBlob);
 
   // 处理src变化时的状态重置
   useEffect(() => {
@@ -294,6 +325,26 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
         src={src}
         fileName={fileName || '未知文件'}
         fileBlob={fileBlob}
+        onStateChange={onStateChange}
+        onError={onError}
+        onEnded={onEnded}
+        onPlayPause={externalPlayPause}
+        onVolumeUp={externalVolumeUp}
+        onVolumeDown={externalVolumeDown}
+        onMute={externalMute}
+        onSeekForward={externalSeekForward}
+        onSeekBackward={externalSeekBackward}
+        onSeekTo={externalSeekTo}
+      />
+    );
+  }
+
+  // 如果是图片文件，使用图片查看器
+  if (isImage) {
+    return (
+      <ImageViewer
+        src={src}
+        fileName={fileName || '未知图片'}
         onStateChange={onStateChange}
         onError={onError}
         onEnded={onEnded}

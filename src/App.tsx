@@ -261,11 +261,18 @@ function App() {
 
   // 媒体类型检测函数
   const isAudioFile = (file: File) => {
-    return file.type.startsWith('audio/');
+    return file.type.startsWith('audio/') || 
+           /\.(mp3|wav|ogg|flac|aac|m4a|wma)$/i.test(file.name);
   };
 
   const isVideoFile = (file: File) => {
-    return file.type.startsWith('video/');
+    return file.type.startsWith('video/') || 
+           /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/i.test(file.name);
+  };
+
+  const isImageFile = (file: File) => {
+    return file.type.startsWith('image/') || 
+           /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(file.name);
   };
 
   // 获取当前媒体类型
@@ -278,6 +285,8 @@ function App() {
       return 'audio';
     } else if (isVideoFile(currentFile)) {
       return 'video';
+    } else if (isImageFile(currentFile)) {
+      return 'image';
     }
     return 'unknown';
   };
@@ -293,16 +302,27 @@ function App() {
     const filteredPlaylist = playlist.filter(item => {
       if (currentMediaType === 'audio') {
         return isAudioFile(item.file);
-      } else {
+      } else if (currentMediaType === 'video') {
         return isVideoFile(item.file);
+      } else if (currentMediaType === 'image') {
+        return isImageFile(item.file);
       }
+      return false;
     });
 
     // 创建原始索引映射
     const originalIndexMap = new Map<number, number>();
     let filteredIndex = 0;
     playlist.forEach((item, originalIndex) => {
-      const isMatch = currentMediaType === 'audio' ? isAudioFile(item.file) : isVideoFile(item.file);
+      let isMatch = false;
+      if (currentMediaType === 'audio') {
+        isMatch = isAudioFile(item.file);
+      } else if (currentMediaType === 'video') {
+        isMatch = isVideoFile(item.file);
+      } else if (currentMediaType === 'image') {
+        isMatch = isImageFile(item.file);
+      }
+      
       if (isMatch) {
         originalIndexMap.set(filteredIndex, originalIndex);
         filteredIndex++;
@@ -360,7 +380,7 @@ function App() {
   const handleOpenFile = () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'video/*,audio/*';
+    input.accept = 'video/*,audio/*,image/*';
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
@@ -524,7 +544,8 @@ function App() {
         
         const files = Array.from(e.dataTransfer.files);
         const mediaFiles = files.filter(file => 
-          file.type.startsWith('video/') || file.type.startsWith('audio/')
+          file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/') ||
+          /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v|mp3|wav|ogg|flac|aac|m4a|wma|jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(file.name)
         );
         
         if (mediaFiles.length > 0) {
@@ -533,7 +554,7 @@ function App() {
           handleFileSelect(mediaFiles[0]);
         } else {
           console.log('没有找到支持的媒体文件');
-          setError('请拖拽音频或视频文件');
+          setError('请拖拽音频、视频或图片文件');
         }
       }}
       style={{ cursor: 'default', userSelect: 'none' }}
