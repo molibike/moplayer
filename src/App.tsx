@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+
 import MenuBar from './components/MenuBar';
 import ControlBar from './components/ControlBar';
 import IntegratedPlayer from './components/IntegratedPlayer';
@@ -18,6 +20,7 @@ interface PlaylistItem {
   name: string;
   url: string;
   file: File;
+  originalPath?: string;
 }
 
 type PlayMode = 'sequential' | 'single' | 'list' | 'random';
@@ -117,18 +120,29 @@ function App() {
     }
   };
 
+  const getFilePath = (file: File): string | undefined => {
+    const anyFile = file as any;
+    if (typeof anyFile.path === 'string' && anyFile.path.length > 0) {
+      return anyFile.path as string;
+    }
+    const absolutePath = file.webkitRelativePath || '';
+    return absolutePath.length > 0 ? absolutePath : undefined;
+  };
+
   const handleFileSelect = async (file: File) => {
     try {
       setError('');
       const url = URL.createObjectURL(file);
       setVideoSrc(url);
+      const originalPath = getFilePath(file);
       
       // 添加到播放列表
       const newItem: PlaylistItem = {
         id: Date.now().toString(),
         name: file.name,
         url: url,
-        file: file
+        file: file,
+        originalPath
       };
       
       setPlaylist(prev => {
@@ -162,11 +176,13 @@ function App() {
       // 创建新的播放列表项
       const newPlaylist = uniqueFiles.map(file => {
         const url = URL.createObjectURL(file);
+        const originalPath = getFilePath(file);
         return {
           id: Date.now().toString() + Math.random(),
           name: file.name,
           url: url,
-          file: file
+          file: file,
+          originalPath
         };
       });
       
@@ -191,11 +207,13 @@ function App() {
       } else {
         // 文件不存在，添加到播放列表并播放
         const url = URL.createObjectURL(file);
-        const newItem = {
+        const originalPath = getFilePath(file);
+        const newItem: PlaylistItem = {
           id: Date.now().toString() + Math.random(),
           name: file.name,
           url: url,
-          file: file
+          file: file,
+          originalPath
         };
         
         const newPlaylist = [...playlist, newItem];
@@ -394,89 +412,78 @@ function App() {
     setPlayerState(prev => ({ ...prev, ...newState }));
   };
 
-  // 窗口拖拽功能 - 全窗口拖拽，类似PotPlayer，通过按键释放时间区分单击和拖拽
+  // 窗口拖拽功能 - 全窗口拖拽
   useEffect(() => {
-    const startWindowDrag = async () => {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        const appWindow = getCurrentWindow();
-        await appWindow.startDragging();
-      } catch (error) {
-        console.error('拖拽失败:', error);
-      }
-    };
-
-    let mouseDownTime = 0;
-    let dragStarted = false;
-    let startX = 0;
-    let startY = 0;
-    const DRAG_TIME_THRESHOLD = 150; // 按键时间阈值（毫秒），超过此时间认为是拖拽意图
-    const DRAG_DISTANCE_THRESHOLD = 5; // 移动距离阈值，避免误触
+    let appWindow: ReturnType<typeof getCurrentWindow> | null = null;
+    try {
+      appWindow = getCurrentWindow();
+    } catch (error) {
+      console.warn('无法获取Tauri窗口实例，窗口拖拽不可用:', error);
+      return;
+    }
 
     const handleMouseDown = (e: MouseEvent) => {
-      // 只处理左键
       if (e.button !== 0) return;
-      
-      const target = e.target as HTMLElement;
-      
-      // 排除交互元素，但允许视频区域拖拽
-      if (target.closest('button') || 
-          target.closest('input') || 
-          target.closest('select') || 
-          target.closest('textarea') || 
-          target.closest('a') ||
-          target.closest('.control-bar') || // 排除控制栏
-          target.closest('.menu-dropdown')) { // 排除菜单下拉
-        return;
+      if (e.detail > 1) return;
+
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const interactiveSelector = 'button, input, select, textarea, a, [data-prevent-drag], .no-drag';
+        if (target.closest(interactiveSelector)) {
+          return;
+        }
       }
 
-      mouseDownTime = Date.now();
-      dragStarted = false;
-      startX = e.clientX;
-      startY = e.clientY;
-      
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let started = false;
+
+      const startWindowDragging = () => {
+        if (started) return;
+        started = true;
+        console.log('尝试开始窗口拖拽', {
+          x: startX,
+          y: startY,
+          target: (e.target as HTMLElement)?.className || (e.target as HTMLElement)?.tagName
+        });
+        appWindow?.startDragging().then(() => {
+          console.log('窗口拖拽调用已发送');
+        }).catch((error: unknown) => {
+          console.error('拖拽失败:', error);
+        });
+      };
+
+      const moveThreshold = 2;
+      const delay = 120;
+      const dragTimer = window.setTimeout(() => {
+        startWindowDragging();
+      }, delay);
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const deltaX = Math.abs(moveEvent.clientX - startX);
+        const deltaY = Math.abs(moveEvent.clientY - startY);
+        if (!started && (deltaX + deltaY) >= moveThreshold) {
+          window.clearTimeout(dragTimer);
+          startWindowDragging();
+        }
+      };
+
+      const handleMouseUp = () => {
+        window.clearTimeout(dragTimer);
+        document.removeEventListener('mousemove', handleMouseMove, true);
+        document.removeEventListener('mouseup', handleMouseUp, true);
+      };
+
+      document.addEventListener('mousemove', handleMouseMove, true);
+      document.addEventListener('mouseup', handleMouseUp, true);
     };
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const deltaX = Math.abs(e.clientX - startX);
-      const deltaY = Math.abs(e.clientY - startY);
-      const currentTime = Date.now();
-      const holdTime = currentTime - mouseDownTime;
-      
-      // 如果按键时间超过阈值或移动距离超过阈值，则开始拖拽
-      if (!dragStarted && (holdTime > DRAG_TIME_THRESHOLD || deltaX > DRAG_DISTANCE_THRESHOLD || deltaY > DRAG_DISTANCE_THRESHOLD)) {
-        dragStarted = true;
-        startWindowDrag();
-      }
-    };
+    document.addEventListener('mousedown', handleMouseDown, true);
 
-    const handleMouseUp = () => {
-      const currentTime = Date.now();
-      const holdTime = currentTime - mouseDownTime;
-      
-      // 如果按键时间很短且没有开始拖拽，则认为是单击，不阻止事件
-      if (holdTime < DRAG_TIME_THRESHOLD && !dragStarted) {
-        // 这是一个快速单击，让事件正常传播到视频元素
-      }
-      
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      dragStarted = false;
-      mouseDownTime = 0;
-    };
-
-    document.addEventListener('mousedown', handleMouseDown);
-    
     return () => {
-      document.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mousedown', handleMouseDown, true);
     };
   }, []);
-
-
 
   const handleError = (errorMessage: string) => {
     setError(errorMessage);
@@ -600,8 +607,8 @@ function App() {
           />
         )}
 
-        {/* 控制栏 */}
-        {videoSrc && (
+        {/* 控制栏 - 仅在音频和视频模式下显示 */}
+        {videoSrc && getCurrentMediaType() !== 'image' && (
           <ControlBar
             onPlayPause={() => playPauseRef.current?.()}
             onStop={handleStop}

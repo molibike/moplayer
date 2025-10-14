@@ -14,6 +14,7 @@ interface IntegratedPlayerProps {
   src: string;
   fileName?: string;
   fileBlob?: File;
+  filePath?: string;
   onStateChange: (state: Partial<PlayerState>) => void;
   onError?: (error: string) => void;
   onEnded?: () => void;
@@ -30,6 +31,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
   src, 
   fileName,
   fileBlob,
+  filePath,
   onStateChange, 
   onError,
   onPlayPause: externalPlayPause,
@@ -345,6 +347,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
       <ImageViewer
         src={src}
         fileName={fileName || '未知图片'}
+        filePath={filePath}
         onStateChange={onStateChange}
         onError={onError}
         onEnded={onEnded}

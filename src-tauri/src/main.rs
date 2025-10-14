@@ -2,7 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::command;
+use tauri::{command, Manager};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,13 +82,25 @@ fn list_images_in_dir(file_path: String) -> Vec<String> {
 }
 
 #[command]
-fn set_window_size(width: u32, height: u32) -> Result<(), String> {
+async fn set_window_size(app_handle: tauri::AppHandle, width: u32, height: u32) -> Result<(), String> {
     println!("Setting window size: {}x{}", width, height);
     
-    // 窗口大小调整需要在窗口上下文中处理，这里先记录日志
-    println!("Window resize requested: {}x{}", width, height);
-    
-    Ok(())
+    match app_handle.get_webview_window("main") {
+        Some(window) => {
+            window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
+                .map_err(|e| format!("Failed to set window size: {}", e))?;
+            Ok(())
+        },
+        None => Err("Main window not found".to_string())
+    }
+}
+
+#[command]
+async fn get_screen_size() -> Result<(u32, u32), String> {
+    // 获取主显示器尺寸
+    // 注意：这里需要在实际的窗口上下文中获取，暂时返回常见的屏幕尺寸
+    // 在实际应用中，应该通过窗口句柄获取当前显示器信息
+    Ok((1920, 1080)) // 默认返回常见分辨率，实际应用中需要动态获取
 }
 
 fn main() {
@@ -102,7 +114,8 @@ fn main() {
             get_player_status,
             seek_to,
             list_images_in_dir,
-            set_window_size
+            set_window_size,
+            get_screen_size
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

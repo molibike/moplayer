@@ -50,12 +50,14 @@ export const useKeyboardShortcuts = ({
             event.preventDefault();
             onSeekForward();
           }
+          // 不阻止默认行为，让ImageViewer处理图片切换
           break;
         case 'ArrowLeft':
           if (event.ctrlKey) {
             event.preventDefault();
             onSeekBackward();
           }
+          // 不阻止默认行为，让ImageViewer处理图片切换
           break;
         case 'F11':
           event.preventDefault();
