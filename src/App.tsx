@@ -40,7 +40,10 @@ function App() {
   const [error, setError] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
   const [playMode, setPlayMode] = useState<PlayMode>('sequential');
-  const [playlistViewMode, setPlaylistViewMode] = useState<'all' | 'audio' | 'video'>('all');
+  const [playlistViewMode, setPlaylistViewMode] = useState<'audio' | 'video'>('audio');
+  const [directoryMode, setDirectoryMode] = useState<boolean>(true);
+  const [dirPlaylist, setDirPlaylist] = useState<string[]>([]);
+  const [dirCurrentIndex, setDirCurrentIndex] = useState<number>(-1);
 
   // 播放器方法引用
   const playPauseRef = useRef<(() => void) | null>(null);
@@ -56,7 +59,52 @@ function App() {
   // 切歌结束回调，根据播放模式决定下一首
   const handleTrackEnded = () => {
     if (playlist.length === 0 || currentPlaylistIndex < 0) return;
-    
+    // 目录模式优先：在音/视频下按目录列表切换
+    const mediaType = getCurrentMediaType();
+    const currentItem = playlist[currentPlaylistIndex];
+    const currentPath = currentItem?.originalPath || (currentItem ? getFilePath(currentItem.file) : undefined);
+    if (directoryMode && (mediaType === 'audio' || mediaType === 'video') && dirPlaylist.length > 0 && typeof currentPath === 'string') {
+      switch (playMode) {
+        case 'single': {
+          // 单曲循环：重新播放当前路径
+          void playPathInDirectoryMode(currentPath);
+          return;
+        }
+        case 'list': {
+          // 列表循环：下一首，末尾回到0
+          const nextIndex = (dirCurrentIndex + 1) % dirPlaylist.length;
+          setDirCurrentIndex(nextIndex);
+          void playPathInDirectoryMode(dirPlaylist[nextIndex]);
+          return;
+        }
+        case 'random': {
+          // 随机：选择一个非当前的随机索引
+          if (dirPlaylist.length > 1) {
+            let r = dirCurrentIndex;
+            while (r === dirCurrentIndex) {
+              r = Math.floor(Math.random() * dirPlaylist.length);
+            }
+            setDirCurrentIndex(r);
+            void playPathInDirectoryMode(dirPlaylist[r]);
+          } else {
+            void playPathInDirectoryMode(currentPath);
+          }
+          return;
+        }
+        case 'sequential':
+        default: {
+          // 顺序：到尾部停止
+          const nextIndex = dirCurrentIndex + 1;
+          if (nextIndex < dirPlaylist.length) {
+            setDirCurrentIndex(nextIndex);
+            void playPathInDirectoryMode(dirPlaylist[nextIndex]);
+          } else {
+            setPlayerState(prev => ({ ...prev, isPlaying: false }));
+          }
+          return;
+        }
+      }
+    }
     const { filteredPlaylist, originalIndexMap, currentFilteredIndex } = getFilteredPlaylistInfo();
     
     switch (playMode) {
@@ -131,6 +179,72 @@ function App() {
     const absolutePath = file.webkitRelativePath || '';
     return absolutePath.length > 0 ? absolutePath : undefined;
   };
+  const isAudioPath = (p: string) => /\.(mp3|wav|ogg|flac|aac|m4a|wma)$/i.test(p);
+  const isVideoPath = (p: string) => /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/i.test(p);
+  const isImagePath = (p: string) => /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(p);
+  const normalizePath = (p: string) => p.replace(/\\/g, '/');
+  const createFileFromPath = async (path: string) => {
+    const { readFile } = await import('@tauri-apps/plugin-fs');
+    const bytes = await readFile(path);
+    const name = normalizePath(path).split('/').pop() || '未命名文件';
+    const file = new File([bytes], name, { type: '' });
+    (file as any).path = path;
+    return file;
+  };
+  const loadDirectoryPlaylist = async (basePath: string) => {
+    try {
+      const normalized = normalizePath(basePath);
+      const dir = normalized.substring(0, normalized.lastIndexOf('/'));
+      if (!dir) return;
+      const { readDir } = await import('@tauri-apps/plugin-fs');
+      const entries: any[] = await readDir(dir);
+      const isAudio = isAudioPath(basePath);
+      const isVideo = isVideoPath(basePath);
+      if (!isAudio && !isVideo) {
+        setDirPlaylist([]);
+        setDirCurrentIndex(-1);
+        return;
+      }
+      const filterFn = (p: string) => (isAudio ? isAudioPath(p) : isVideo ? isVideoPath(p) : false);
+      const files: string[] = entries
+        .map((e: any) => {
+          const p = typeof e.path === 'string' && e.path.length > 0 ? e.path : `${dir}/${e.name}`;
+          return normalizePath(p);
+        })
+        .filter((p: string) => typeof p === 'string' && filterFn(p));
+      files.sort((a, b) => a.split('/').pop()!
+        .localeCompare(b.split('/').pop()!, undefined, { numeric: true, sensitivity: 'base' }));
+      setDirPlaylist(files);
+      const idx = files.indexOf(normalized);
+      setDirCurrentIndex(idx >= 0 ? idx : 0);
+    } catch (e) {
+      console.warn('加载目录播放列表失败:', e);
+      setDirPlaylist([]);
+      setDirCurrentIndex(-1);
+    }
+  };
+  const playPathInDirectoryMode = async (path: string) => {
+    try {
+      const file = await createFileFromPath(path);
+      const url = URL.createObjectURL(file);
+      lastSelectedFileRef.current = file;
+      setVideoSrc(url);
+      setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
+      setPlaylist(prev => {
+        if (currentPlaylistIndex >= 0 && currentPlaylistIndex < prev.length) {
+          const next = [...prev];
+          next[currentPlaylistIndex] = { ...next[currentPlaylistIndex], name: file.name, url, file, originalPath: path };
+          return next;
+        } else {
+          const newItem: PlaylistItem = { id: Date.now().toString(), name: file.name, url, file, originalPath: path };
+          setCurrentPlaylistIndex(prev.length);
+          return [...prev, newItem];
+        }
+      });
+    } catch (e) {
+      console.error('目录模式播放路径失败:', e);
+    }
+  };
 
   const handleFileSelect = async (file: File) => {
     try {
@@ -156,6 +270,13 @@ function App() {
         return newPlaylist;
       });
       setPlayerState(prev => ({ ...prev, isPlaying: false })); // 让IntegratedPlayer自动处理播放
+      // 目录模式：加载同目录的音/视频列表
+      if (directoryMode && originalPath && (isAudioFile(file) || isVideoFile(file))) {
+        void loadDirectoryPlaylist(originalPath);
+      } else {
+        setDirPlaylist([]);
+        setDirCurrentIndex(-1);
+      }
     } catch (err) {
       setError('文件加载失败: ' + (err as Error).message);
     }
@@ -366,7 +487,17 @@ function App() {
   // 上一曲
   const handlePrevious = () => {
     if (playlist.length === 0) return;
-    
+    // 目录模式优先：在音/视频下按目录列表切换
+    const mediaType = getCurrentMediaType();
+    const currentItem = playlist[currentPlaylistIndex];
+    const currentPath = currentItem?.originalPath || (currentItem ? getFilePath(currentItem.file) : undefined);
+    if (directoryMode && (mediaType === 'audio' || mediaType === 'video') && dirPlaylist.length > 0 && typeof currentPath === 'string') {
+      let prevIndex = dirCurrentIndex - 1;
+      if (prevIndex < 0) prevIndex = dirPlaylist.length - 1;
+      setDirCurrentIndex(prevIndex);
+      void playPathInDirectoryMode(dirPlaylist[prevIndex]);
+      return;
+    }
     const { filteredPlaylist, originalIndexMap, currentFilteredIndex } = getFilteredPlaylistInfo();
     
     if (filteredPlaylist.length === 0 || currentFilteredIndex < 0) return;
@@ -383,7 +514,17 @@ function App() {
   // 下一曲
   const handleNext = () => {
     if (playlist.length === 0) return;
-    
+    // 目录模式优先：在音/视频下按目录列表切换
+    const mediaType = getCurrentMediaType();
+    const currentItem = playlist[currentPlaylistIndex];
+    const currentPath = currentItem?.originalPath || (currentItem ? getFilePath(currentItem.file) : undefined);
+    if (directoryMode && (mediaType === 'audio' || mediaType === 'video') && dirPlaylist.length > 0 && typeof currentPath === 'string') {
+      let nextIndex = dirCurrentIndex + 1;
+      if (nextIndex >= dirPlaylist.length) nextIndex = 0;
+      setDirCurrentIndex(nextIndex);
+      void playPathInDirectoryMode(dirPlaylist[nextIndex]);
+      return;
+    }
     const { filteredPlaylist, originalIndexMap, currentFilteredIndex } = getFilteredPlaylistInfo();
     
     if (filteredPlaylist.length === 0 || currentFilteredIndex < 0) return;
@@ -758,6 +899,19 @@ function App() {
             }}
             playlistViewMode={playlistViewMode}
             setPlaylistViewMode={setPlaylistViewMode}
+            directoryMode={directoryMode}
+            onToggleDirectoryMode={() => {
+              const next = !directoryMode;
+              setDirectoryMode(next);
+              const item = playlist[currentPlaylistIndex];
+              const path = item?.originalPath || (item ? getFilePath(item.file) : undefined);
+              if (next && path && (getCurrentMediaType() === 'audio' || getCurrentMediaType() === 'video')) {
+                void loadDirectoryPlaylist(path);
+              } else {
+                setDirPlaylist([]);
+                setDirCurrentIndex(-1);
+              }
+            }}
           />
         )}
 

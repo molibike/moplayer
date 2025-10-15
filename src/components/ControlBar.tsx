@@ -25,8 +25,10 @@ interface ControlBarProps {
   onSeekTo?: (time: number) => void;
   playMode: 'sequential' | 'single' | 'list' | 'random';
   onTogglePlayMode: () => void;
-  playlistViewMode: 'all' | 'audio' | 'video';
-  setPlaylistViewMode: (mode: 'all' | 'audio' | 'video') => void;
+  playlistViewMode: 'audio' | 'video';
+  setPlaylistViewMode: (mode: 'audio' | 'video') => void;
+  directoryMode: boolean;
+  onToggleDirectoryMode: () => void;
 }
 
 const ControlBar: React.FC<ControlBarProps> = ({
@@ -49,6 +51,8 @@ const ControlBar: React.FC<ControlBarProps> = ({
   onTogglePlayMode,
   playlistViewMode,
   setPlaylistViewMode,
+  directoryMode,
+  onToggleDirectoryMode,
 }) => {
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
@@ -106,7 +110,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
   const filteredPlaylist = playlist.filter(item => {
     if (playlistViewMode === 'audio') return isAudioFile(item.file);
     if (playlistViewMode === 'video') return isVideoFile(item.file);
-    return true; // 'all' 模式显示所有项目
+    return false;
   });
 
   // 如果是图片模式，隐藏控制栏（根据功能要求第1条）
@@ -116,14 +120,13 @@ const ControlBar: React.FC<ControlBarProps> = ({
 
   // 切换播放列表显示模式
   const togglePlaylistViewMode = () => {
-    const modes: ('all' | 'audio' | 'video')[] = ['all', 'audio', 'video'];
+    const modes: ('audio' | 'video')[] = ['audio', 'video'];
     const currentIndex = modes.indexOf(playlistViewMode);
     const nextIndex = (currentIndex + 1) % modes.length;
     setPlaylistViewMode(modes[nextIndex]);
   };
 
   const playlistViewModeLabels = {
-    all: '全部',
     audio: '音频',
     video: '视频'
   };
@@ -136,9 +139,6 @@ const ControlBar: React.FC<ControlBarProps> = ({
       originalIndexMap.set(filteredIndex, originalIndex);
       filteredIndex++;
     } else if (playlistViewMode === 'video' && isVideoFile(item.file)) {
-      originalIndexMap.set(filteredIndex, originalIndex);
-      filteredIndex++;
-    } else if (playlistViewMode === 'all') {
       originalIndexMap.set(filteredIndex, originalIndex);
       filteredIndex++;
     }
@@ -514,29 +514,34 @@ const ControlBar: React.FC<ControlBarProps> = ({
             >
               <div className="p-2 border-b border-gray-700/50 flex items-center justify-between">
                 <div className="text-sm font-semibold">
-                  播放列表 ({filteredPlaylist.length}
-                  {playlistViewMode !== 'all' && ` ${playlistViewModeLabels[playlistViewMode]}`})
+                  播放列表 ({filteredPlaylist.length})
                 </div>
                 <div className="flex items-center space-x-2">
-                  {/* 列表类型切换按钮 */}
+                  {/* 列表类型切换按钮（纯图标） */}
                   <button
                     onClick={togglePlaylistViewMode}
-                    className="px-2 py-1 bg-purple-600/50 hover:bg-purple-500/50 text-white text-xs rounded flex items-center space-x-1 transition-colors"
+                    className="w-6 h-6 bg-purple-600/50 hover:bg-purple-500/50 text-white text-xs rounded flex items-center justify-center transition-colors"
                     title={`当前显示: ${playlistViewModeLabels[playlistViewMode]}`}
                   >
-                    <span className="text-sm">
-                      {playlistViewMode === 'all' ? '📋' : playlistViewMode === 'audio' ? '🎵' : '🎬'}
+                    <span className="text-sm" aria-label={playlistViewModeLabels[playlistViewMode]}>
+                      {playlistViewMode === 'audio' ? '🎵' : '🎬'}
                     </span>
-                    <span>{playlistViewModeLabels[playlistViewMode]}</span>
                   </button>
-                  {/* 播放模式切换按钮 */}
+                  {/* 播放模式切换按钮（纯图标） */}
                   <button
                     onClick={onTogglePlayMode}
-                    className="px-2 py-1 bg-gray-700/50 hover:bg-gray-600/50 text-white text-xs rounded flex items-center space-x-1 transition-colors"
+                    className="w-6 h-6 bg-gray-700/50 hover:bg-gray-600/50 text-white text-xs rounded flex items-center justify-center transition-colors"
                     title={`当前模式: ${playModeLabels[playMode]}`}
                   >
-                    <span className="text-sm">{playModeIcons[playMode]}</span>
-                    <span>{playModeLabels[playMode]}</span>
+                    <span className="text-sm" aria-label={playModeLabels[playMode]}>{playModeIcons[playMode]}</span>
+                  </button>
+                  {/* 目录模式开关（纯图标，默认开启） */}
+                  <button
+                    onClick={onToggleDirectoryMode}
+                    className={`w-6 h-6 ${directoryMode ? 'bg-blue-600/50 hover:bg-blue-500/50' : 'bg-gray-700/50 hover:bg-gray-600/50'} text-white text-xs rounded flex items-center justify-center transition-colors`}
+                    title={directoryMode ? '目录模式：开' : '目录模式：关'}
+                  >
+                    <span className="text-sm" aria-label="目录模式">📁</span>
                   </button>
                   {/* 加号按钮 - 添加文件 */}
                   <button
