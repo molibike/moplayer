@@ -70,6 +70,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const lockedWindowSizeRef = useRef<{ width: number; height: number } | null>(null);
   // 控制目录列表的初始化加载，仅在首次或外部文件变更时加载
   const listInitializedRef = useRef(false);
+  // 操作提示显示控制：鼠标在底部20%区域停留时显示
+  const [hintVisible, setHintVisible] = useState(false);
+  const hintTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     imageInfoRef.current = imageInfo;
@@ -209,7 +212,10 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
 
 
   // 统一构造图片加载候选URL（asset -> blob -> file）
-  const buildCandidateUrls = useCallback(async (path: string): Promise<{ asset?: string; blob?: string; file: string }> => {
+  const buildCandidateUrls = useCallback(async (
+    path: string,
+    options?: { includeBlob?: boolean }
+  ): Promise<{ asset?: string; blob?: string; file: string }> => {
     const normalized = path.replace(/\\/g, '/');
     const out: { asset?: string; blob?: string; file: string } = { file: `file://${normalized}` };
 
@@ -225,21 +231,23 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       console.warn('convertFileSrc 不可用，跳过:', e);
     }
 
-    // 候选2：FS 读取生成 blob
-    try {
-      const { readFile } = await import('@tauri-apps/plugin-fs');
-      const bytes = await readFile(normalized);
-      const ext = normalized.split('.').pop()?.toLowerCase() || '';
-      const mimeMap: Record<string, string> = {
-        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon'
-      };
-      const mime = mimeMap[ext] || 'application/octet-stream';
-      const blob = new Blob([bytes], { type: mime });
-      const u = URL.createObjectURL(blob);
-      console.log('生成 blob URL 作为回退:', u);
-      out.blob = u;
-    } catch (e) {
-      console.warn('FS 读取失败，无法生成 blob URL:', e);
+    // 候选2：FS 读取生成 blob（按需，可选，避免频繁磁盘IO导致切换卡顿）
+    if (options?.includeBlob) {
+      try {
+        const { readFile } = await import('@tauri-apps/plugin-fs');
+        const bytes = await readFile(normalized);
+        const ext = normalized.split('.').pop()?.toLowerCase() || '';
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon'
+        };
+        const mime = mimeMap[ext] || 'application/octet-stream';
+        const blob = new Blob([bytes], { type: mime });
+        const u = URL.createObjectURL(blob);
+        console.log('生成 blob URL 作为回退:', u);
+        out.blob = u;
+      } catch (e) {
+        console.warn('FS 读取失败，无法生成 blob URL:', e);
+      }
     }
 
     return out;
@@ -262,7 +270,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     let mounted = true;
     (async () => {
       try {
-        const candidates = await buildCandidateUrls(inferredPath);
+        const candidates = await buildCandidateUrls(inferredPath, { includeBlob: false });
         const next = candidates.asset || candidates.blob || candidates.file || '';
         if (mounted && next) {
           setActiveSrc(next);
@@ -562,7 +570,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       
       // 创建新的图片URL并更新（带失败回退），仅通过状态更新 src，避免直接改 DOM
       try {
-        const candidates = await buildCandidateUrls(newImagePath);
+        const candidates = await buildCandidateUrls(newImagePath, { includeBlob: false });
         // 清理旧的 blob URL（由 activeSrc 统一管理）
         if (activeSrc.startsWith('blob:')) {
           try { URL.revokeObjectURL(activeSrc); } catch {}
@@ -579,6 +587,23 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
             currentTime: 0,
             duration: 0
           });
+        }
+
+        // 预加载相邻图片以优化下一次切换速度（仅做 asset 级预加载，避免IO）
+        try {
+          const preloadIndexNext = (newIndex + 1) % imageList.length;
+          const preloadIndexPrev = (newIndex - 1 + imageList.length) % imageList.length;
+          const preloadPaths = [imageList[preloadIndexNext], imageList[preloadIndexPrev]].filter(Boolean) as string[];
+          for (const p of preloadPaths) {
+            const c = await buildCandidateUrls(p, { includeBlob: false });
+            const u = c.asset || c.file;
+            if (u) {
+              const img = new Image();
+              img.src = u;
+            }
+          }
+        } catch (preErr) {
+          console.warn('预加载相邻图片失败，忽略:', preErr);
         }
       } catch (error) {
         console.error('切换图片失败:', error);
@@ -624,7 +649,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
 
     try {
-      const candidates = await buildCandidateUrls(inferredPath);
+      const candidates = await buildCandidateUrls(inferredPath, { includeBlob: true });
       const current = activeSrc;
 
       const trySet = (next?: string) => {
@@ -777,7 +802,27 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     // 主要拖拽逻辑由全局事件监听处理，这里只做基本处理
     e.preventDefault();
-  }, []);
+
+    // 操作提示显示逻辑：鼠标在容器底部20%区域停留一段时间
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const pointerY = e.clientY - rect.top;
+    const inBottomZone = pointerY >= rect.height * 0.75; // 底部25%
+
+    // 鼠标移动时重置提示显示计时
+    if (hintTimerRef.current) {
+      clearTimeout(hintTimerRef.current);
+      hintTimerRef.current = null;
+    }
+
+    if (inBottomZone) {
+      hintTimerRef.current = window.setTimeout(() => {
+        setHintVisible(true);
+      }, 250); // 停留250ms显示
+    } else {
+      if (hintVisible) setHintVisible(false);
+    }
+  }, [hintVisible]);
 
   // 鼠标释放事件 - 简化逻辑
   const handleMouseUp = useCallback(() => {
@@ -785,7 +830,13 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     if (isDragging) {
       setIsDragging(false);
     }
-  }, [isDragging]);
+    // 鼠标离开或释放时隐藏提示并清理计时器
+    if (hintTimerRef.current) {
+      clearTimeout(hintTimerRef.current);
+      hintTimerRef.current = null;
+    }
+    if (hintVisible) setHintVisible(false);
+  }, [isDragging, hintVisible]);
 
   // 双击锁定/解锁窗口
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -955,7 +1006,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   return (
     <div 
       ref={containerRef}
-      className="relative bg-black select-none"
+      className="relative bg-white select-none"
       data-prevent-drag={isWindowLocked && isSpacePressed ? '' : undefined}
 
       style={getContainerStyle()}
@@ -978,25 +1029,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         draggable={false}
       />
 
-      {/* 状态指示器 */}
-      <div className="absolute top-4 left-4 bg-black/70 text-white px-3 py-1 rounded text-sm z-10">
-        {isWindowLocked ? '🔒 窗口锁定' : '🔓 窗口自由'}
-        {isSpacePressed && ' + 拖拽模式'}
-      </div>
-
-      {/* 图片信息 */}
-      {imageInfo && (
-        <div className="absolute top-4 right-4 bg-black/70 text-white px-3 py-1 rounded text-sm z-10">
-          {Math.round(scale * 100)}% | {imageInfo.naturalWidth}×{imageInfo.naturalHeight}
-        </div>
-      )}
-
-      {/* 导航指示器 */}
-      {imageList.length > 0 && currentImageIndex >= 0 && (
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/70 text-white px-3 py-1 rounded text-sm z-10">
-          {currentImageIndex + 1} / {imageList.length}
-        </div>
-      )}
+      {/* 状态/尺寸/索引文本已移除 */}
 
       {/* 边缘点击区域指示（可点击切换） */}
       <div
@@ -1008,13 +1041,14 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         onClick={() => switchImage('next')}
       />
 
-      {/* 操作提示 */}
-      <div className="absolute bottom-2 left-2 text-white/60 text-xs z-10">
-        {isWindowLocked 
-          ? '双击解锁窗口 | 空格+拖拽移动图片 | 滚轮缩放' 
-          : '双击锁定窗口 | 滚轮缩放窗口 | 点击边缘切换图片'
-        }
-      </div>
+      {/* 操作提示：仅在鼠标停留底部20%区域时显示 */}
+      {hintVisible && (
+        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 text-white/80 text-xs z-10 bg-black/70 px-3 py-1 rounded">
+          {isWindowLocked 
+            ? '双击解锁窗口 | 空格+拖拽移动图片 | 滚轮缩放' 
+            : '双击锁定窗口 | 滚轮缩放窗口 | 点击边缘切换图片'}
+        </div>
+      )}
     </div>
   );
 };

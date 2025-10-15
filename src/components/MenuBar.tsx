@@ -4,7 +4,8 @@ import { message } from '@tauri-apps/plugin-dialog';
 interface MenuBarProps {
   onOpenFile: () => void;
   onExit: () => void;
-  isPlaying?: boolean;
+  isPlaying?: boolean; // 兼容旧逻辑
+  autoHide?: boolean;  // 新增：图片/视频模式下均可自动隐藏
 }
 
 interface MenuItem {
@@ -21,7 +22,7 @@ interface SeparatorItem {
   separator: true;
 }
 
-const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlaying = false }) => {
+const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlaying = false, autoHide = false }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(true);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -81,9 +82,10 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
     }
   ];
 
-  // 菜单栏显示逻辑
+  // 菜单栏显示逻辑：当 autoHide 为真时，鼠标静止5秒或离开窗口即隐藏
   useEffect(() => {
-    if (!isPlaying) {
+    const shouldAutoHide = autoHide || isPlaying;
+    if (!shouldAutoHide) {
       setIsVisible(true);
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
@@ -110,7 +112,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
     };
 
     const handleMouseLeave = () => {
-      if (isPlaying) {
+      if (shouldAutoHide) {
         setIsVisible(false);
         setActiveMenu(null);
       }
@@ -129,10 +131,11 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
         clearTimeout(mouseMoveTimeoutRef.current);
       }
     };
-  }, [isPlaying]);
+  }, [autoHide, isPlaying]);
 
   useEffect(() => {
-    if (!isPlaying) {
+    const shouldAutoHide = autoHide || isPlaying;
+    if (!shouldAutoHide) {
       setIsVisible(true);
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
@@ -141,7 +144,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
         clearTimeout(mouseMoveTimeoutRef.current);
       }
     }
-  }, [isPlaying]);
+  }, [autoHide, isPlaying]);
 
   const handleMenuClick = (key: string) => {
     console.log(`菜单项 ${key} 被点击`);
@@ -220,21 +223,22 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       className="menu-bar bg-gray-900/95 backdrop-blur-md border-b border-gray-700/50 text-white fixed top-0 left-0 right-0 z-50 transition-all duration-300"
       onMouseEnter={() => setIsVisible(true)}
       onMouseLeave={() => {
-        if (isPlaying) {
+        if (autoHide || isPlaying) {
           setIsVisible(false);
         }
       }}
     >
       <div className="flex justify-between items-center h-10">
-        <div className="flex items-center">
-          <div className="px-4">
-            <span className="text-sm font-semibold text-gray-200">MoPlayer</span>
+        {/* 左侧：品牌与菜单（可挤压，优先保证右侧按钮显示） */}
+        <div className="flex items-center flex-1 min-w-0 overflow-x-hidden">
+          <div className="px-2 md:px-4 truncate">
+            <span className="text-sm font-semibold text-gray-200 truncate">MoPlayer</span>
           </div>
-          <div className="flex items-center space-x-1">
+          <div className="flex items-center space-x-1 flex-shrink min-w-0">
             {menuItems.map((menu) => (
             <div key={menu.key} className="relative">
               <button
-                className="px-4 py-2 text-sm hover:bg-white/20 transition-colors"
+                className="px-3 md:px-4 py-2 text-sm hover:bg-white/20 transition-colors truncate"
                 onClick={() => handleMenuClick(menu.key)}
                 onMouseEnter={() => setIsVisible(true)}
               >
@@ -272,7 +276,8 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
           </div>
         </div>
 
-        <div className="flex">
+        {/* 右侧：窗口控制按钮（不挤压、始终可见） */}
+        <div className="flex flex-shrink-0 items-center">
           <button
             className="px-4 py-2 hover:bg-gray-700/50 transition-colors text-sm"
             onClick={handleMinimize}

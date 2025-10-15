@@ -635,6 +635,7 @@ function App() {
         onOpenFile={handleOpenFile}
         onExit={handleExit}
         isPlaying={videoSrc ? playerState.isPlaying : false}
+        autoHide={(getCurrentMediaType() === 'image') || (getCurrentMediaType() === 'video' && playerState.isPlaying)}
       />
 
       {/* 拖拽覆盖层 */}
