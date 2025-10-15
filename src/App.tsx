@@ -614,6 +614,31 @@ function App() {
     return () => { if (unlisten) unlisten(); };
   }, []);
 
+  // 应用启动后主动拉取启动文件路径，确保“打开方式/右键菜单”即开即播
+  useEffect(() => {
+    (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const path = await invoke<string | null>('get_startup_file');
+        if (path && typeof path === 'string' && path.length > 0) {
+          try {
+            const { readFile } = await import('@tauri-apps/plugin-fs');
+            const bytes = await readFile(path);
+            const name = path.replace(/\\/g, '/').split('/').pop() || '未命名文件';
+            const mime = guessMimeType(path);
+            const file = new File([bytes], name, { type: mime });
+            (file as any).path = path;
+            await handleFileSelect(file);
+          } catch (e) {
+            console.error('拉取启动文件并打开失败:', e);
+          }
+        }
+      } catch (e) {
+        console.warn('获取启动文件路径失败:', e);
+      }
+    })();
+  }, []);
+
   return (
     <div 
       className="h-screen player-container app-background text-white relative overflow-hidden"

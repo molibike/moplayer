@@ -1,0 +1,106 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!-- 涓烘墍鏈夋枃浠舵坊鍔犲彸閿彍鍗曪細浣跨敤 MoPlayer 鎵撳紑 -->
+  <Fragment>
+    <DirectoryRef Id="TARGETDIR">
+      <!-- 涓哄父瑙侀煶瑙嗛绫诲瀷娣诲姞鍙抽敭鑿滃崟锛歄pen with MoPlayer -->
+      <Component Id="MoPlayerContextMenuComponent" Guid="*">
+        <!-- mp4 -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mp4\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mp4\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" KeyPath="yes" />
+        </RegistryKey>
+
+        <!-- avi -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.avi\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.avi\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- mkv -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mkv\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mkv\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- mov -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mov\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mov\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- webm -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.webm\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.webm\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- mp3 -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mp3\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mp3\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- wav -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wav\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wav\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- flac -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.flac\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.flac\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- aac -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.aac\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.aac\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- ogg -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.ogg\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.ogg\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- m4a -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.m4a\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.m4a\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- wma -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wma\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="Open with MoPlayer" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wma\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

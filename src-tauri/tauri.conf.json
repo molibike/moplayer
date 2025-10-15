@@ -79,9 +79,13 @@
       "timestampUrl": "",
       "wix": {
         "language": "zh-CN",
-        "fragmentPaths": [],
+        "fragmentPaths": [
+          "wix/ContextMenuFragment.wxs"
+        ],
         "componentGroupRefs": [],
-        "componentRefs": [],
+        "componentRefs": [
+          "MoPlayerContextMenuComponent"
+        ],
         "featureGroupRefs": [],
         "mergeRefs": []
       }

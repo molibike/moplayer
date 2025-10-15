@@ -2,9 +2,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::{command, Manager, Wry, Emitter};
+use tauri::{command, Manager, Wry, Emitter, State};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatus {
@@ -124,12 +125,24 @@ fn open_file(file_path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Default)]
+struct StartupState {
+    file_path: Mutex<Option<String>>, // 保存启动时传入的文件路径
+}
+
+#[command]
+fn get_startup_file(state: State<StartupState>) -> Option<String> {
+    // 读取并清空，避免重复打开
+    state.file_path.lock().ok().and_then(|mut p| p.take())
+}
+
 fn main() {
     env_logger::init();
     
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .manage(StartupState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
             get_player_status,
@@ -137,7 +150,8 @@ fn main() {
             list_images_in_dir,
             set_window_size,
             get_screen_size,
-            open_file
+            open_file,
+            get_startup_file
         ])
         .setup(|app| {
             // 处理命令行参数
@@ -149,10 +163,11 @@ fn main() {
                 let file_path = &args[1];
                 if PathBuf::from(file_path).exists() {
                     println!("Opening file from command line: {}", file_path);
-                    // 通过事件通知前端打开该文件
-                    let handle = app.handle();
-                    if let Err(e) = handle.emit("open-file", file_path.to_string()) {
-                        eprintln!("Failed to emit open-file event: {}", e);
+                    // 保存启动路径，前端初始化完成后主动拉取
+                    if let Some(state) = app.try_state::<StartupState>() {
+                        if let Ok(mut p) = state.file_path.lock() {
+                            *p = Some(file_path.to_string());
+                        }
                     }
                 }
             }
