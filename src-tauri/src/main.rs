@@ -96,11 +96,24 @@ async fn set_window_size(app_handle: tauri::AppHandle, width: u32, height: u32) 
 }
 
 #[command]
-async fn get_screen_size() -> Result<(u32, u32), String> {
-    // 获取主显示器尺寸
-    // 注意：这里需要在实际的窗口上下文中获取，暂时返回常见的屏幕尺寸
-    // 在实际应用中，应该通过窗口句柄获取当前显示器信息
-    Ok((1920, 1080)) // 默认返回常见分辨率，实际应用中需要动态获取
+async fn get_screen_size(app_handle: tauri::AppHandle) -> Result<(u32, u32), String> {
+    // 优先通过主窗口获取主显示器尺寸
+    if let Some(window) = app_handle.get_webview_window("main") {
+        match window.primary_monitor() {
+            Ok(Some(monitor)) => {
+                let size = monitor.size();
+                return Ok((size.width, size.height));
+            }
+            Ok(None) => {
+                // 未找到主显示器，继续回退
+            }
+            Err(e) => {
+                eprintln!("获取主显示器失败: {}", e);
+            }
+        }
+    }
+    // 回退：返回默认分辨率
+    Ok((1920, 1080))
 }
 
 fn main() {

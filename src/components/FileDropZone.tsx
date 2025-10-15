@@ -56,6 +56,7 @@ const FileDropZone: React.FC<FileDropZoneProps> = ({ onFileSelect, onFileSelectC
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+
       <div className="space-y-4">
         <div className="text-6xl text-gray-500">
           🎬

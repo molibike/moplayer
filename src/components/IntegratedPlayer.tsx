@@ -162,6 +162,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     };
   }, [src]);
 
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -348,9 +349,9 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
         src={src}
         fileName={fileName || '未知图片'}
         filePath={filePath}
+        fileBlob={fileBlob}
         onStateChange={onStateChange}
         onError={onError}
-        onEnded={onEnded}
         onPlayPause={externalPlayPause}
         onVolumeUp={externalVolumeUp}
         onVolumeDown={externalVolumeDown}

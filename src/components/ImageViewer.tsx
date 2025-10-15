@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window';
+import { getCurrentWindow, LogicalSize, LogicalPosition } from '@tauri-apps/api/window';
 
 interface ImageViewerProps {
   src: string;
   fileName?: string;
   filePath?: string;
+  fileBlob?: File;
   onStateChange: (state: {
     isPlaying?: boolean;
     currentTime?: number;
@@ -13,7 +14,6 @@ interface ImageViewerProps {
     volume?: number;
   }) => void;
   onError?: (error: string) => void;
-  onEnded?: () => void;
   onPlayPause?: React.MutableRefObject<(() => void) | null>;
   onVolumeUp?: React.MutableRefObject<(() => void) | null>;
   onVolumeDown?: React.MutableRefObject<(() => void) | null>;
@@ -34,9 +34,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   src, 
   fileName,
   filePath,
+  fileBlob,
   onStateChange,
   onError,
-  onEnded,
   onPlayPause: externalPlayPause,
   onVolumeUp: externalVolumeUp,
   onVolumeDown: externalVolumeDown,
@@ -57,6 +57,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const [imageList, setImageList] = useState<string[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(-1);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  // 用内部状态驱动 <img src>，避免直接修改 DOM 导致 React 反复覆盖引起闪烁
+  const [activeSrc, setActiveSrc] = useState<string>(src);
+  const prevActiveSrcRef = useRef<string>(src);
   const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [screenSize, setScreenSize] = useState({ width: 1920, height: 1080 });
   const windowRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null);
@@ -65,6 +68,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const scaleRef = useRef(1);
   const windowSizeRef = useRef<{ width: number; height: number } | null>(null);
   const lockedWindowSizeRef = useRef<{ width: number; height: number } | null>(null);
+  // 控制目录列表的初始化加载，仅在首次或外部文件变更时加载
+  const listInitializedRef = useRef(false);
 
   useEffect(() => {
     imageInfoRef.current = imageInfo;
@@ -78,9 +83,31 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     scaleRef.current = scale;
   }, [scale]);
 
+  // 外部传入的 src 变化时，同步到内部显示源
+  useEffect(() => {
+    setActiveSrc(src || '');
+  }, [src]);
+
+  // 释放旧的 blob URL，避免内存泄漏
+  useEffect(() => {
+    const prev = prevActiveSrcRef.current;
+    if (prev && prev.startsWith('blob:') && prev !== activeSrc) {
+      try { URL.revokeObjectURL(prev); } catch {}
+    }
+    prevActiveSrcRef.current = activeSrc;
+  }, [activeSrc]);
+
   useEffect(() => {
     if (filePath) {
-      setCurrentFilePath(filePath);
+      const normalizedPath = filePath.replace(/\\/g, '/');
+      setCurrentFilePath(normalizedPath);
+      // 外部文件路径变更：重新加载目录图片列表（一次性）
+      try {
+        loadImageList(normalizedPath);
+        listInitializedRef.current = true;
+      } catch (e) {
+        console.warn('根据新的 filePath 加载目录图片列表失败:', e);
+      }
     }
   }, [filePath]);
 
@@ -166,13 +193,12 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
 
     try {
-      if ((window as any).__TAURI__) {
-        const [width, height] = await invoke<[number, number]>('get_screen_size');
-        setScreenSize({ width, height });
-        return;
-      }
+      // 直接尝试通过 Tauri 后端获取屏幕尺寸；失败则回退到浏览器值
+      const [width, height] = await invoke<[number, number]>('get_screen_size');
+      setScreenSize({ width, height });
+      return;
     } catch (error) {
-      console.error('获取屏幕尺寸失败:', error);
+      console.warn('Tauri 获取屏幕尺寸失败，使用浏览器值回退:', error);
     }
 
     setScreenSize({ 
@@ -181,55 +207,119 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     });
   }, []);
 
+
+  // 统一构造图片加载候选URL（asset -> blob -> file）
+  const buildCandidateUrls = useCallback(async (path: string): Promise<{ asset?: string; blob?: string; file: string }> => {
+    const normalized = path.replace(/\\/g, '/');
+    const out: { asset?: string; blob?: string; file: string } = { file: `file://${normalized}` };
+
+    // 候选1：convertFileSrc（asset.localhost / asset 协议）
+    try {
+      const mod = await import('@tauri-apps/api/core');
+      if ((mod as any)?.convertFileSrc) {
+        const u = (mod as any).convertFileSrc(normalized);
+        console.log('使用 convertFileSrc(core) 生成URL:', u);
+        out.asset = u;
+      }
+    } catch (e) {
+      console.warn('convertFileSrc 不可用，跳过:', e);
+    }
+
+    // 候选2：FS 读取生成 blob
+    try {
+      const { readFile } = await import('@tauri-apps/plugin-fs');
+      const bytes = await readFile(normalized);
+      const ext = normalized.split('.').pop()?.toLowerCase() || '';
+      const mimeMap: Record<string, string> = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon'
+      };
+      const mime = mimeMap[ext] || 'application/octet-stream';
+      const blob = new Blob([bytes], { type: mime });
+      const u = URL.createObjectURL(blob);
+      console.log('生成 blob URL 作为回退:', u);
+      out.blob = u;
+    } catch (e) {
+      console.warn('FS 读取失败，无法生成 blob URL:', e);
+    }
+
+    return out;
+  }, []);
+
+  // 若 activeSrc 为空（例如初次打开时），基于可推断路径构造候选并设定显示源
+  useEffect(() => {
+    const needInit = !activeSrc || activeSrc.length === 0;
+    if (!needInit) return;
+
+    const inferredPath = (() => {
+      if (currentFilePath) return currentFilePath;
+      if (filePath && filePath.length > 0) return filePath;
+      if (src && src.startsWith('file://')) return src.substring(7);
+      return null;
+    })();
+
+    if (!inferredPath) return;
+
+    let mounted = true;
+    (async () => {
+      try {
+        const candidates = await buildCandidateUrls(inferredPath);
+        const next = candidates.asset || candidates.blob || candidates.file || '';
+        if (mounted && next) {
+          setActiveSrc(next);
+        }
+      } catch (e) {
+        console.warn('初始化 activeSrc 失败，保持静默:', e);
+      }
+    })();
+
+    return () => { mounted = false; };
+  }, [activeSrc, currentFilePath, filePath, src, buildCandidateUrls]);
+
+  // 额外回退：当 activeSrc 为空且存在 fileBlob 时，直接使用 fileBlob 生成的 blob URL
+  useEffect(() => {
+    const needInit = !activeSrc || activeSrc.length === 0;
+    if (!needInit || !fileBlob) return;
+    try {
+      const u = URL.createObjectURL(fileBlob);
+      setActiveSrc(u);
+      console.log('根据 fileBlob 生成 blob URL 作为回退');
+    } catch (e) {
+      console.warn('根据 fileBlob 生成 blob URL 失败:', e);
+    }
+  }, [activeSrc, fileBlob]);
+
   // 获取同目录下的图片列表
   const loadImageList = useCallback(async (filePath: string) => {
     try {
-      console.log('调用Tauri API获取目录图片列表，路径:', filePath);
-      
-      if (typeof window !== 'undefined' && (window as any).__TAURI__) {
-        const list = await invoke<string[]>('list_images_in_dir', { filePath });
-        console.log('Tauri API返回图片列表:', list);
-        setImageList(list);
-        
-        // 找到当前图片在列表中的索引
-        const index = list.indexOf(filePath);
-        console.log('当前图片索引:', index, '文件路径:', filePath);
-        setCurrentImageIndex(index >= 0 ? index : 0);
-        
-        console.log('加载图片列表成功:', list.length, '张图片');
-      } else {
-        setImageList([]);
-        setCurrentImageIndex(-1);
-      }
+      console.log('=== 开始加载图片列表 ===');
+      console.log('文件路径:', filePath);
+      console.log('环境判定（使用窗口实例）:', !!windowRef.current);
+
+      // 直接调用 Tauri 后端，失败时按非 Tauri 环境处理
+      const list = await invoke<string[]>('list_images_in_dir', { filePath });
+      console.log('Tauri 后端返回:');
+      console.log('- 图片数量:', list.length);
+      console.log('- 图片列表:', list);
+
+      setImageList(list);
+
+      // 找到当前图片在列表中的索引
+      const index = list.indexOf(filePath);
+      console.log('- 当前图片索引:', index);
+      console.log('- 查找的文件路径:', filePath);
+      setCurrentImageIndex(index >= 0 ? index : 0);
+
+      console.log('=== 图片列表加载完成 ===');
     } catch (error) {
-      console.error('加载图片列表失败:', error);
-      setImageList([]);
-      setCurrentImageIndex(-1);
+      console.error('=== 加载图片列表失败（可能非 Tauri 环境）===');
+      console.error('错误详情:', error);
+      // 在非 Tauri 环境下至少保留当前文件作为唯一项，避免列表被错误清空
+      setImageList(filePath ? [filePath] : []);
+      setCurrentImageIndex(0);
     }
   }, []);
 
-  const getActiveWindowSize = useCallback(() => {
-    return lockedWindowSizeRef.current ?? windowSizeRef.current;
-  }, []);
 
-  const calculateFitScale = useCallback((naturalWidth: number, naturalHeight: number) => {
-    const activeSize = getActiveWindowSize();
-    if (!activeSize || !naturalWidth || !naturalHeight) {
-      return 1;
-    }
-
-    const widthRatio = activeSize.width / naturalWidth;
-    const heightRatio = activeSize.height / naturalHeight;
-    const scaleToFit = Math.min(widthRatio, heightRatio, 1);
-    return Math.max(MIN_SCALE, Math.min(MAX_SCALE, scaleToFit));
-  }, [getActiveWindowSize]);
-
-  const resetImageToFitWindow = useCallback((naturalWidth: number, naturalHeight: number) => {
-    const fitScale = calculateFitScale(naturalWidth, naturalHeight);
-    setScale(fitScale);
-    scaleRef.current = fitScale;
-    setPosition({ x: 0, y: 0 });
-  }, [calculateFitScale]);
 
   const getContainerDimensions = useCallback(() => {
     if (containerSize.width > 0 && containerSize.height > 0) {
@@ -247,17 +337,46 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     return { width: 0, height: 0 };
   }, [containerSize]);
 
-  const getBaseOffset = useCallback((scaleValue: number) => {
-    if (!imageInfoRef.current) {
-      return { x: 0, y: 0 };
+  const calculateFitScale = useCallback((naturalWidth: number, naturalHeight: number) => {
+    // 图片加载时保持窗口原本尺寸不变，让图片适应窗口
+    // 优先使用当前窗口尺寸，如果窗口锁定则使用锁定尺寸，最后回退到容器尺寸
+    let targetSize = null;
+    
+    if (isWindowLockedRef.current && lockedWindowSizeRef.current) {
+      // 窗口锁定状态，使用锁定的窗口尺寸
+      targetSize = lockedWindowSizeRef.current;
+    } else if (windowSizeRef.current) {
+      // 使用当前窗口尺寸
+      targetSize = windowSizeRef.current;
+    } else {
+      // 回退到容器尺寸
+      targetSize = getContainerDimensions();
     }
-    const { width: containerWidth, height: containerHeight } = getContainerDimensions();
-    const scaledWidth = imageInfoRef.current.naturalWidth * scaleValue;
-    const scaledHeight = imageInfoRef.current.naturalHeight * scaleValue;
-    const baseX = (containerWidth - scaledWidth) / 2;
-    const baseY = (containerHeight - scaledHeight) / 2;
-    return { x: baseX, y: baseY };
+    
+    if (!targetSize || !naturalWidth || !naturalHeight || targetSize.width <= 0 || targetSize.height <= 0) {
+      return 1;
+    }
+
+    // 计算适应窗口的缩放比例，确保图片完全显示在窗口中
+    const widthRatio = targetSize.width / naturalWidth;
+    const heightRatio = targetSize.height / naturalHeight;
+    const scaleToFit = Math.min(widthRatio, heightRatio);
+    
+    // 应用缩放限制 - 窗口锁定状态下不受MAX_SCALE限制
+    const maxScale = isWindowLockedRef.current ? 50 : MAX_SCALE;
+    return Math.max(MIN_SCALE, Math.min(maxScale, scaleToFit));
   }, [getContainerDimensions]);
+
+  const resetImageToFitWindow = useCallback((naturalWidth: number, naturalHeight: number) => {
+    const fitScale = calculateFitScale(naturalWidth, naturalHeight);
+    setScale(fitScale);
+    scaleRef.current = fitScale;
+    setPosition({ x: 0, y: 0 });
+  }, [calculateFitScale]);
+
+  // NOTE: 移除基准偏移，始终以容器中心为参考点。
+  // 图片使用 left/top 50% + 负半宽/半高实现居中，
+  // 仅通过 position 偏移进行平移，避免出现向左偏移的问题。
 
   // 调整窗口大小
   const adjustWindowSize = useCallback(async (newScale: number) => {
@@ -321,6 +440,18 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         }
       }
 
+      // 计算并保持窗口中心绝对坐标不变（避免看起来以左上角为基准缩放）
+      let centerX: number | null = null;
+      let centerY: number | null = null;
+      try {
+        const oldPos = await currentWindow.outerPosition();
+        const oldSize = await currentWindow.innerSize();
+        centerX = Math.round(oldPos.x + oldSize.width / 2);
+        centerY = Math.round(oldPos.y + oldSize.height / 2);
+      } catch (posErr) {
+        console.warn('获取窗口位置/尺寸失败，中心保持可能不生效:', posErr);
+      }
+
       console.log('调整窗口大小:', {
         finalWidth,
         finalHeight,
@@ -342,13 +473,25 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         windowSizeRef.current = normalizedSize;
         console.log('窗口尺寸调整成功（invoke 回退）');
       }
+
+      // 根据新尺寸回设窗口位置以保持中心不变
+      if (centerX !== null && centerY !== null) {
+        const newLeft = Math.round(centerX - finalWidth / 2);
+        const newTop = Math.round(centerY - finalHeight / 2);
+        try {
+          await currentWindow.setPosition(new LogicalPosition(newLeft, newTop));
+          console.log('窗口位置已调整以保持中心不变');
+        } catch (posSetErr) {
+          console.warn('设置窗口位置失败:', posSetErr);
+        }
+      }
     } catch (error) {
       console.error('调整窗口大小失败:', error);
     }
   }, [screenSize]);
 
   // ... rest of the code remains the same ...
-  // 图片加载完成处理
+  // 图片加载完成处理 - 修复居中显示问题
   const handleImageLoad = () => {
     const img = imageRef.current;
     if (!img) return;
@@ -363,31 +506,36 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       naturalHeight
     });
 
+    // 每次加载图片都重置到适应窗口的缩放，确保图片完全显示在窗口中央
     resetImageToFitWindow(naturalWidth, naturalHeight);
 
     const inferredPath = (() => {
-      if (filePath && filePath.length > 0) return filePath;
       if (currentFilePath) return currentFilePath;
+      if (filePath && filePath.length > 0) return filePath;
       if (src.startsWith('file://')) {
         return src.substring(7);
       }
       return null;
     })();
 
-    if (inferredPath) {
-      setCurrentFilePath(inferredPath);
-      console.log('开始加载同目录图片列表，文件路径:', inferredPath);
-      loadImageList(inferredPath);
-    } else {
-      console.log('未能确定图片文件路径，无法加载同目录图片列表');
-      setImageList([]);
-      setCurrentImageIndex(-1);
+    // 仅在首次或外部文件变更后第一次加载时初始化目录列表
+    if (!listInitializedRef.current && inferredPath) {
+      const normalizedPath = inferredPath.replace(/\\/g, '/');
+      setCurrentFilePath(normalizedPath);
+      console.log('初次加载同目录图片列表，文件路径:', normalizedPath);
+      loadImageList(normalizedPath);
+      listInitializedRef.current = true;
     }
     
     console.log('图片加载完成:', fileName, '尺寸:', naturalWidth, '×', naturalHeight);
+
+    // 加载成功后清理可能残留的错误提示
+    if (onError) {
+      onError('');
+    }
   };
 
-  // 切换图片
+  // 切换图片 - 修复切换逻辑（提前声明以避免 TDZ）
   const switchImage = useCallback(async (direction: 'prev' | 'next') => {
     if (imageList.length === 0 || currentImageIndex < 0) {
       console.log('没有可切换的图片');
@@ -408,31 +556,22 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     if (newImagePath) {
       console.log('切换图片路径:', newImagePath);
       
-      // 重置状态
-      setScale(1);
-      scaleRef.current = 1;
-      setPosition({ x: 0, y: 0 });
+      // 更新索引和路径
       setCurrentImageIndex(newIndex);
       setCurrentFilePath(newImagePath);
       
-      // 创建新的图片URL并更新
+      // 创建新的图片URL并更新（带失败回退），仅通过状态更新 src，避免直接改 DOM
       try {
-        // 读取新图片文件
-        const response = await fetch(`file://${newImagePath}`);
-        const blob = await response.blob();
-        const newUrl = URL.createObjectURL(blob);
-        
-        // 更新图片源
-        const img = imageRef.current;
-        if (img) {
-          // 清理旧的blob URL
-          if (src.startsWith('blob:')) {
-            URL.revokeObjectURL(src);
-          }
-          
-          img.src = newUrl;
+        const candidates = await buildCandidateUrls(newImagePath);
+        // 清理旧的 blob URL（由 activeSrc 统一管理）
+        if (activeSrc.startsWith('blob:')) {
+          try { URL.revokeObjectURL(activeSrc); } catch {}
         }
-        
+
+        setImageInfo(null);
+        const nextSrc = candidates.asset || candidates.blob || candidates.file || '';
+        setActiveSrc(nextSrc);
+
         // 通知父组件图片已切换
         if (onStateChange) {
           onStateChange({ 
@@ -443,62 +582,139 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         }
       } catch (error) {
         console.error('切换图片失败:', error);
-        onError?.('切换图片失败');
+        // 静默处理：不弹窗，直接切换到下一张；若只有一张则停止
+        if (imageList.length > 1) {
+          setTimeout(() => switchImage('next'), 0);
+        } else {
+          console.warn('仅有一张图片且切换失败，保持静默不弹窗');
+        }
       }
     }
-  }, [currentImageIndex, imageList, src, onStateChange, onError]);
+  }, [currentImageIndex, imageList, activeSrc, onStateChange]);
 
-  // 缩放图片
-  const zoomImage = useCallback((zoomFactor: number, clientX?: number, clientY?: number) => {
+  // 初始加载失败时的回退处理（asset -> blob -> file）
+  const handleInitialImageError = useCallback(async () => {
+    const img = imageRef.current;
+    if (!img) return;
+
+    const inferredPath = (() => {
+      if (currentFilePath) return currentFilePath;
+      if (filePath && filePath.length > 0) return filePath;
+      if (src && src.startsWith('file://')) return src.substring(7);
+      return null;
+    })();
+
+    if (!inferredPath) {
+      // 优先尝试使用 fileBlob 作为回退
+      if (fileBlob) {
+        try {
+          const u = URL.createObjectURL(fileBlob);
+          if (u && u !== activeSrc) {
+            setActiveSrc(u);
+            console.log('图片加载失败，回退到 fileBlob 的 blob URL');
+            return;
+          }
+        } catch (e) {
+          console.warn('从 fileBlob 构建 blob URL 失败:', e);
+        }
+      }
+      console.warn('图片加载失败且无法推断路径，回退不可用');
+      onError?.('图片加载失败');
+      return;
+    }
+
+    try {
+      const candidates = await buildCandidateUrls(inferredPath);
+      const current = activeSrc;
+
+      const trySet = (next?: string) => {
+        if (!next || next === current) return false;
+        setActiveSrc(next);
+        return true;
+      };
+
+      // 依次尝试 asset -> blob -> file（跳过与当前src相同的项）
+      if (trySet(candidates.asset)) {
+        console.log('初始加载失败，回退到 asset URL');
+        return;
+      }
+      if (trySet(candidates.blob)) {
+        console.log('初始加载失败，回退到 blob URL');
+        return;
+      }
+      if (trySet(candidates.file)) {
+        console.log('初始加载失败，回退到 file:// URL');
+        return;
+      }
+
+      const errorMessage = '图片加载失败，所有回退方式均不可用';
+      console.error(errorMessage);
+      // 静默策略：已有列表场景下尝试跳过到下一张；仅单张时保持静默
+      if (imageList.length > 1 && currentImageIndex >= 0) {
+        setTimeout(() => switchImage('next'), 0);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('初始加载回退处理失败:', msg);
+      if (imageList.length > 1 && currentImageIndex >= 0) {
+        setTimeout(() => switchImage('next'), 0);
+      }
+    }
+  }, [buildCandidateUrls, currentFilePath, filePath, activeSrc, imageList, currentImageIndex, switchImage, fileBlob]);
+
+  // 缩放图片 - 以图片中心为基准点，确保图片中心相对于屏幕的绝对坐标不变
+  const zoomImage = useCallback((zoomFactor: number) => {
     if (!imageInfo) return;
 
-    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale * zoomFactor));
+    // 在窗口锁定状态下，不受MAX_SCALE限制，允许图片超过窗口尺寸
+    const maxScale = isWindowLockedRef.current ? 100 : MAX_SCALE;
+    const newScale = Math.max(MIN_SCALE, Math.min(maxScale, scale * zoomFactor));
 
     if (newScale === scale) return;
 
+    // 获取容器信息
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    if (!containerRect) return;
+
+    // 计算当前图片中心在屏幕上的绝对坐标
+    // 图片的实际渲染位置：容器中心 + position偏移
+    const containerCenterX = containerRect.left + containerRect.width / 2;
+    const containerCenterY = containerRect.top + containerRect.height / 2;
+    
+    // 当前图片中心的屏幕绝对坐标（这个坐标在缩放时必须保持不变）
+    const currentImageCenterX = containerCenterX + position.x;
+    const currentImageCenterY = containerCenterY + position.y;
+
+    // 缩放比例变化
+    // 保持图片中心在屏幕上的绝对坐标不变
+    
+    // 由于图片尺寸变化，需要调整position来保持图片中心的屏幕绝对坐标不变
+    // 新的position = 当前图片中心屏幕坐标 - 容器中心坐标（中心保持不变即可）
+    const newPosX = currentImageCenterX - containerCenterX;
+    const newPosY = currentImageCenterY - containerCenterY;
+
+    // 更新缩放和位置
     setScale(newScale);
-
-    if (!isWindowLockedRef.current) {
-      setPosition({ x: 0, y: 0 });
-      adjustWindowSize(newScale);
-      return;
-    }
-
-    if (!containerRef.current || !clientX || !clientY) {
-      return;
-    }
-
-    const rect = containerRef.current.getBoundingClientRect();
-    const pointerX = clientX - rect.left;
-    const pointerY = clientY - rect.top;
-
-    const baseBefore = getBaseOffset(scale);
-    const baseAfter = getBaseOffset(newScale);
-
-    const translateBeforeX = baseBefore.x + position.x;
-    const translateBeforeY = baseBefore.y + position.y;
-
-    const imageCoordX = (pointerX - translateBeforeX) / scale;
-    const imageCoordY = (pointerY - translateBeforeY) / scale;
-
-    const translateAfterX = pointerX - imageCoordX * newScale;
-    const translateAfterY = pointerY - imageCoordY * newScale;
-
-    const newPosX = translateAfterX - baseAfter.x;
-    const newPosY = translateAfterY - baseAfter.y;
-
     setPosition({ x: newPosX, y: newPosY });
-  }, [imageInfo, scale, adjustWindowSize, position, getBaseOffset]);
 
-  // 鼠标滚轮缩放
+    // 如果窗口未锁定，调整窗口大小
+    if (!isWindowLockedRef.current) {
+      adjustWindowSize(newScale);
+    }
+  }, [imageInfo, scale, adjustWindowSize, position]);
+
+  // 鼠标滚轮缩放 - 平滑缩放
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.cancelable) {
       e.preventDefault();
     }
-    
-    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+
+    // 基于滚轮幅度的指数缩放，提升缩小时的平滑度
+    const base = 1.0015;
+    const clamped = Math.max(-60, Math.min(60, -e.deltaY));
+    const zoomFactor = Math.pow(base, clamped);
     console.log('检测到滚轮缩放', { deltaY: e.deltaY, zoomFactor });
-    zoomImage(zoomFactor, e.clientX, e.clientY);
+    zoomImage(zoomFactor);
   }, [zoomImage]);
 
   // 鼠标按下事件
@@ -553,24 +769,23 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         posY: position.y
       });
       e.preventDefault();
+      e.stopPropagation();
     }
   }, [isWindowLocked, isSpacePressed, position]);
 
-  // 鼠标移动事件
+  // 鼠标移动事件 - 简化逻辑，主要拖拽由全局事件处理
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (isDragging && isWindowLocked && isSpacePressed) {
-      // 拖拽图片
-      setPosition({
-        x: dragStart.posX + (e.clientX - dragStart.pointerX),
-        y: dragStart.posY + (e.clientY - dragStart.pointerY)
-      });
-    }
-  }, [isDragging, isWindowLocked, isSpacePressed, dragStart]);
-
-  // 鼠标释放事件
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
+    // 主要拖拽逻辑由全局事件监听处理，这里只做基本处理
+    e.preventDefault();
   }, []);
+
+  // 鼠标释放事件 - 简化逻辑
+  const handleMouseUp = useCallback(() => {
+    // 主要由全局事件处理，这里只做基本清理
+    if (isDragging) {
+      setIsDragging(false);
+    }
+  }, [isDragging]);
 
   // 双击锁定/解锁窗口
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -598,12 +813,13 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
   }, [switchImage, isDragging]);
 
-  // 键盘事件处理
+  // 键盘事件处理 - 修复空格键拖拽
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         setIsSpacePressed(true);
         e.preventDefault();
+        e.stopPropagation();
       } else if (e.code === 'ArrowLeft') {
         switchImage('prev');
         e.preventDefault();
@@ -616,18 +832,45 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         setIsSpacePressed(false);
+        setIsDragging(false); // 释放空格键时停止拖拽
         e.preventDefault();
+        e.stopPropagation();
       }
     };
 
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
+    document.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('keyup', handleKeyUp, true);
 
     return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('keyup', handleKeyUp);
+      document.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('keyup', handleKeyUp, true);
     };
   }, [switchImage]);
+
+  // 全局拖拽事件绑定（确保拖拽不受容器边界影响）
+  useEffect(() => {
+    if (!(isDragging && isWindowLocked && isSpacePressed)) return;
+
+    const handleDocMouseMove = (e: MouseEvent) => {
+      const newX = dragStart.posX + (e.clientX - dragStart.pointerX);
+      const newY = dragStart.posY + (e.clientY - dragStart.pointerY);
+      setPosition({ x: newX, y: newY });
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    const handleDocMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    document.addEventListener('mousemove', handleDocMouseMove, true);
+    document.addEventListener('mouseup', handleDocMouseUp, true);
+
+    return () => {
+      document.removeEventListener('mousemove', handleDocMouseMove, true);
+      document.removeEventListener('mouseup', handleDocMouseUp, true);
+    };
+  }, [isDragging, isWindowLocked, isSpacePressed, dragStart]);
 
   // 初始化屏幕尺寸
   useEffect(() => {
@@ -656,57 +899,56 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
   }, [isWindowLocked, resetImageToFitWindow]);
 
-  // 计算图片样式
+  // 计算图片样式 - 以图片中心为基准点缩放
   const getImageStyle = (): React.CSSProperties => {
     if (!imageInfo) {
+      // 未加载完成时，使用静态居中样式，避免绝对定位在未知尺寸下把图片挪出视口
       return {
         display: 'block',
-        objectFit: 'contain'
+        objectFit: 'contain',
+        maxWidth: '100%',
+        maxHeight: '100%',
+        margin: '0 auto'
       };
     }
 
     const scaledWidth = imageInfo.naturalWidth * scale;
     const scaledHeight = imageInfo.naturalHeight * scale;
-    const baseOffset = getBaseOffset(scale);
-    const translateX = (isWindowLocked ? position.x : 0) + baseOffset.x;
-    const translateY = (isWindowLocked ? position.y : 0) + baseOffset.y;
+    // 直接使用位置偏移，transformOrigin确保缩放以中心为基准点
+    const translateX = position.x;
+    const translateY = position.y;
 
     return {
       width: `${scaledWidth}px`,
       height: `${scaledHeight}px`,
+      // 关键：覆盖 Tailwind/浏览器默认的 img 最大尺寸限制，允许图片超过容器
+      maxWidth: 'none',
+      maxHeight: 'none',
       transform: `translate(${translateX}px, ${translateY}px)`,
-      transformOrigin: 'top left',
+      transformOrigin: 'center center',
       position: 'absolute',
-      left: 0,
-      top: 0,
-      transition: isDragging ? 'none' : 'transform 0.1s ease',
+      left: '50%',
+      top: '50%',
+      marginLeft: `-${scaledWidth / 2}px`,
+      marginTop: `-${scaledHeight / 2}px`,
+      transition: isDragging ? 'none' : 'transform 0.15s ease',
       objectFit: 'contain',
       display: 'block',
       cursor: isWindowLocked && isSpacePressed ? (isDragging ? 'grabbing' : 'grab') : 'default'
     };
   };
 
-  // 计算容器样式
+  // 计算容器样式 - 优化居中布局
   const getContainerStyle = (): React.CSSProperties => {
-    if (!imageInfo) {
-      return {
-        position: 'relative',
-        width: '100%',
-        height: '100%',
-        overflow: 'hidden',
-        userSelect: 'none',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      };
-    }
-
     return {
       position: 'relative',
       width: '100%',
       height: '100%',
       overflow: isWindowLockedRef.current ? 'hidden' : 'visible',
-      userSelect: 'none'
+      userSelect: 'none',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center'
     };
   };
 
@@ -714,6 +956,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     <div 
       ref={containerRef}
       className="relative bg-black select-none"
+      data-prevent-drag={isWindowLocked && isSpacePressed ? '' : undefined}
 
       style={getContainerStyle()}
       onClick={handleContainerClick}
@@ -726,11 +969,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     >
       <img
         ref={imageRef}
-        src={src}
+        src={activeSrc}
         alt={fileName || '图片'}
         style={getImageStyle()}
         onLoad={handleImageLoad}
-        onError={() => onError?.('图片加载失败')}
+        onError={handleInitialImageError}
         className="select-none"
         draggable={false}
       />
@@ -755,9 +998,15 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         </div>
       )}
 
-      {/* 边缘点击区域指示 */}
-      <div className="absolute inset-y-0 left-0 w-[10%] opacity-0 hover:opacity-20 bg-blue-500/30 transition-opacity z-5 pointer-events-auto" />
-      <div className="absolute inset-y-0 right-0 w-[10%] opacity-0 hover:opacity-20 bg-blue-500/30 transition-opacity z-5 pointer-events-auto" />
+      {/* 边缘点击区域指示（可点击切换） */}
+      <div
+        className="absolute inset-y-0 left-0 w-[10%] opacity-0 hover:opacity-20 bg-blue-500/30 transition-opacity z-5 pointer-events-auto"
+        onClick={() => switchImage('prev')}
+      />
+      <div
+        className="absolute inset-y-0 right-0 w-[10%] opacity-0 hover:opacity-20 bg-blue-500/30 transition-opacity z-5 pointer-events-auto"
+        onClick={() => switchImage('next')}
+      />
 
       {/* 操作提示 */}
       <div className="absolute bottom-2 left-2 text-white/60 text-xs z-10">

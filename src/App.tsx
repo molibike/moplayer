@@ -49,6 +49,8 @@ function App() {
   const seekForwardRef = useRef<(() => void) | null>(null);
   const seekBackwardRef = useRef<(() => void) | null>(null);
   const seekToRef = useRef<((time: number) => void) | null>(null);
+  // 记录最近选择的文件，用于解决首次渲染时播放列表索引尚未更新导致的类型误判
+  const lastSelectedFileRef = useRef<File | null>(null);
 
   // 切歌结束回调，根据播放模式决定下一首
   const handleTrackEnded = () => {
@@ -132,6 +134,8 @@ function App() {
   const handleFileSelect = async (file: File) => {
     try {
       setError('');
+      // 先记录最近选择的文件，避免初次渲染时索引未更新导致类型判定失败
+      lastSelectedFileRef.current = file;
       const url = URL.createObjectURL(file);
       setVideoSrc(url);
       const originalPath = getFilePath(file);
@@ -195,6 +199,8 @@ function App() {
   const handleFileSelectAndPlay = (files: File[]) => {
     if (files.length > 0) {
       const file = files[0]; // 只处理第一个文件
+      // 记录最近选择的文件，确保类型判定稳定
+      lastSelectedFileRef.current = file;
       
       // 检查文件是否已在播放列表中
       const existingIndex = playlist.findIndex(item => 
@@ -231,6 +237,8 @@ function App() {
   const handlePlaylistItemClick = (index: number) => {
     if (index >= 0 && index < playlist.length) {
       const item = playlist[index];
+      // 同步最近选择的文件，避免类型判定抖动
+      lastSelectedFileRef.current = item.file;
       setVideoSrc(item.url);
       setCurrentPlaylistIndex(index);
       // 重置播放状态，让IntegratedPlayer自动处理播放
@@ -395,17 +403,73 @@ function App() {
     setCurrentPlaylistIndex(-1);
   };
 
-  const handleOpenFile = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'video/*,audio/*,image/*';
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        handleFileSelect(file);
-      }
+  // 根据扩展名推断MIME类型（用于从FS读取后创建Blob）
+  const guessMimeType = (path: string): string => {
+    const ext = path.split('.').pop()?.toLowerCase() || '';
+    const map: Record<string, string> = {
+      // 图片
+      'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'bmp': 'image/bmp', 'webp': 'image/webp', 'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+      // 音频
+      'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg', 'aac': 'audio/aac', 'flac': 'audio/flac', 'm4a': 'audio/mp4', 'wma': 'audio/x-ms-wma',
+      // 视频
+      'mp4': 'video/mp4', 'webm': 'video/webm', 'ogv': 'video/ogg', 'mkv': 'video/x-matroska', 'mov': 'video/quicktime', 'wmv': 'video/x-ms-wmv', 'flv': 'video/x-flv', 'm4v': 'video/x-m4v'
     };
-    input.click();
+    return map[ext] || 'application/octet-stream';
+  };
+
+  const handleOpenFile = async () => {
+    try {
+      // 优先使用 Tauri 原生文件对话框，确保可获得真实路径
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const { readFile } = await import('@tauri-apps/plugin-fs');
+
+      const selected = await open({
+        multiple: false,
+        filters: [
+          {
+            name: '媒体文件',
+            extensions: ['mp4','webm','ogv','mkv','mov','wmv','flv','m4v','mp3','wav','ogg','aac','flac','m4a','wma','jpg','jpeg','png','gif','bmp','webp','svg','ico']
+          }
+        ]
+      });
+
+      if (typeof selected === 'string') {
+        const path = selected;
+        const bytes = await readFile(path);
+        const mime = guessMimeType(path);
+        const name = path.replace(/\\/g, '/').split('/').pop() || '未命名文件';
+        const file = new File([bytes], name, { type: mime });
+        // 保留原始路径，确保后续同目录读取可用
+        (file as any).path = path;
+
+        // 使用统一的文件选择处理逻辑，确保 originalPath 传递
+        await handleFileSelect(file);
+      } else {
+        // 回退到浏览器 input（极端情况下）
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'video/*,audio/*,image/*';
+        input.onchange = (e) => {
+          const file = (e.target as HTMLInputElement).files?.[0];
+          if (file) {
+            handleFileSelect(file);
+          }
+        };
+        input.click();
+      }
+    } catch (error) {
+      console.error('打开文件失败，使用回退输入框:', error);
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'video/*,audio/*,image/*';
+      input.onchange = (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (file) {
+          handleFileSelect(file);
+        }
+      };
+      input.click();
+    }
   };
 
   const handlePlayerStateChange = (newState: Partial<PlayerState>) => {
@@ -584,6 +648,7 @@ function App() {
       <div className="absolute inset-0">
         {!videoSrc ? (
           <div className="w-full h-full flex items-center justify-center p-8">
+
             <FileDropZone 
               onFileSelect={handleFileSelect}
               onFileSelectClick={handleOpenFile}
@@ -592,8 +657,9 @@ function App() {
         ) : (
           <IntegratedPlayer
             src={videoSrc}
-            fileName={playlist[currentPlaylistIndex]?.name}
-            fileBlob={playlist[currentPlaylistIndex]?.file}
+            fileName={playlist[currentPlaylistIndex]?.name || lastSelectedFileRef.current?.name}
+            fileBlob={playlist[currentPlaylistIndex]?.file || lastSelectedFileRef.current || undefined}
+            filePath={playlist[currentPlaylistIndex]?.originalPath}
             onStateChange={handlePlayerStateChange}
             onError={handleError}
             onEnded={handleTrackEnded}

@@ -130,6 +130,11 @@ input[type="range"]::-moz-range-thumb {
   background: transparent;
 }
 
+/* 应用背景：确保透明窗口下也有可见底色 */
+.app-background {
+  background-color: #0f172a; /* slate-900 */
+}
+
 .app-drag-region {
   -webkit-app-region: drag;
 }
