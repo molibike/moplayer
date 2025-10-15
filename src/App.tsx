@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 import MenuBar from './components/MenuBar';
@@ -586,6 +587,32 @@ function App() {
     onFullscreen: handleToggleFullscreen,
     onOpenFile: handleOpenFile,
   });
+
+  // 监听来自后端的打开文件事件（用于右键“使用 MoPlayer 打开”或文件关联双击）
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    (async () => {
+      try {
+        unlisten = await listen<string>('open-file', async (event) => {
+          try {
+            const path = event.payload;
+            const { readFile } = await import('@tauri-apps/plugin-fs');
+            const bytes = await readFile(path);
+            const name = path.replace(/\\/g, '/').split('/').pop() || '未命名文件';
+            const mime = guessMimeType(path);
+            const file = new File([bytes], name, { type: mime });
+            (file as any).path = path;
+            await handleFileSelect(file);
+          } catch (e) {
+            console.error('处理 open-file 事件失败:', e);
+          }
+        });
+      } catch (e) {
+        console.warn('监听 open-file 事件失败:', e);
+      }
+    })();
+    return () => { if (unlisten) unlisten(); };
+  }, []);
 
   return (
     <div 

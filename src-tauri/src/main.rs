@@ -2,8 +2,9 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::{command, Manager};
+use tauri::{command, Manager, Wry, Emitter};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatus {
@@ -116,6 +117,13 @@ async fn get_screen_size(app_handle: tauri::AppHandle) -> Result<(u32, u32), Str
     Ok((1920, 1080))
 }
 
+#[command]
+fn open_file(file_path: String) -> Result<(), String> {
+    println!("Opening file: {}", file_path);
+    // 这里可以添加文件打开逻辑
+    Ok(())
+}
+
 fn main() {
     env_logger::init();
     
@@ -128,8 +136,29 @@ fn main() {
             seek_to,
             list_images_in_dir,
             set_window_size,
-            get_screen_size
+            get_screen_size,
+            open_file
         ])
+        .setup(|app| {
+            // 处理命令行参数
+            let args: Vec<String> = std::env::args().collect();
+            println!("Command line arguments: {:?}", args);
+            
+            // 如果有文件路径参数，发送到前端
+            if args.len() > 1 {
+                let file_path = &args[1];
+                if PathBuf::from(file_path).exists() {
+                    println!("Opening file from command line: {}", file_path);
+                    // 通过事件通知前端打开该文件
+                    let handle = app.handle();
+                    if let Err(e) = handle.emit("open-file", file_path.to_string()) {
+                        eprintln!("Failed to emit open-file event: {}", e);
+                    }
+                }
+            }
+            
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

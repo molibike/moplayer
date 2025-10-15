@@ -70,13 +70,133 @@
     ],
     "resources": [],
     "externalBin": [],
-    "copyright": "",
+    "copyright": "Copyright © 2024 MoPlayer Team",
     "shortDescription": "高性能音视频播放器",
     "longDescription": "基于 Tauri + Rust/FFmpeg 架构的高性能小体积 Windows 桌面音视频播放器",
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": ""
-    }
+      "timestampUrl": "",
+      "wix": {
+        "language": "zh-CN",
+        "fragmentPaths": [],
+        "componentGroupRefs": [],
+        "componentRefs": [],
+        "featureGroupRefs": [],
+        "mergeRefs": []
+      }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["mp4"],
+        "description": "MP4 视频文件",
+        "mimeType": "video/mp4"
+      },
+      {
+        "ext": ["avi"],
+        "description": "AVI 视频文件",
+        "mimeType": "video/avi"
+      },
+      {
+        "ext": ["mkv"],
+        "description": "MKV 视频文件",
+        "mimeType": "video/x-matroska"
+      },
+      {
+        "ext": ["mov"],
+        "description": "MOV 视频文件",
+        "mimeType": "video/quicktime"
+      },
+      {
+        "ext": ["wmv"],
+        "description": "WMV 视频文件",
+        "mimeType": "video/x-ms-wmv"
+      },
+      {
+        "ext": ["flv"],
+        "description": "FLV 视频文件",
+        "mimeType": "video/x-flv"
+      },
+      {
+        "ext": ["webm"],
+        "description": "WebM 视频文件",
+        "mimeType": "video/webm"
+      },
+      {
+        "ext": ["m4v"],
+        "description": "M4V 视频文件",
+        "mimeType": "video/x-m4v"
+      },
+      {
+        "ext": ["3gp"],
+        "description": "3GP 视频文件",
+        "mimeType": "video/3gpp"
+      },
+      {
+        "ext": ["mp3"],
+        "description": "MP3 音频文件",
+        "mimeType": "audio/mpeg"
+      },
+      {
+        "ext": ["wav"],
+        "description": "WAV 音频文件",
+        "mimeType": "audio/wav"
+      },
+      {
+        "ext": ["flac"],
+        "description": "FLAC 音频文件",
+        "mimeType": "audio/flac"
+      },
+      {
+        "ext": ["aac"],
+        "description": "AAC 音频文件",
+        "mimeType": "audio/aac"
+      },
+      {
+        "ext": ["ogg"],
+        "description": "OGG 音频文件",
+        "mimeType": "audio/ogg"
+      },
+      {
+        "ext": ["wma"],
+        "description": "WMA 音频文件",
+        "mimeType": "audio/x-ms-wma"
+      },
+      {
+        "ext": ["m4a"],
+        "description": "M4A 音频文件",
+        "mimeType": "audio/mp4"
+      },
+      {
+        "ext": ["jpg", "jpeg"],
+        "description": "JPEG 图像文件",
+        "mimeType": "image/jpeg"
+      },
+      {
+        "ext": ["png"],
+        "description": "PNG 图像文件",
+        "mimeType": "image/png"
+      },
+      {
+        "ext": ["gif"],
+        "description": "GIF 图像文件",
+        "mimeType": "image/gif"
+      },
+      {
+        "ext": ["bmp"],
+        "description": "BMP 图像文件",
+        "mimeType": "image/bmp"
+      },
+      {
+        "ext": ["webp"],
+        "description": "WebP 图像文件",
+        "mimeType": "image/webp"
+      },
+      {
+        "ext": ["svg"],
+        "description": "SVG 图像文件",
+        "mimeType": "image/svg+xml"
+      }
+    ]
   }
 }
