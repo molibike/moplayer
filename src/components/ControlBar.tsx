@@ -170,17 +170,22 @@ const ControlBar: React.FC<ControlBarProps> = ({
         clearTimeout(mouseMoveTimeoutRef.current);
       }
       
-      // 鼠标静止5秒后隐藏
+      // 鼠标静止5秒后隐藏控制栏，但不立即隐藏播放列表
       mouseMoveTimeoutRef.current = setTimeout(() => {
         setIsVisible(false);
-        setShowPlaylist(false);
       }, 5000);
     };
 
     const handleMouseLeave = () => {
       if (isPlaying) {
         setIsVisible(false);
-        setShowPlaylist(false);
+        // 鼠标离开后5秒才隐藏播放列表
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+        timeoutRef.current = setTimeout(() => {
+          setShowPlaylist(false);
+        }, 5000);
       }
     };
 
@@ -234,6 +239,8 @@ const ControlBar: React.FC<ControlBarProps> = ({
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [showPlaylist]);
+
+  
 
 
 
@@ -292,20 +299,49 @@ const ControlBar: React.FC<ControlBarProps> = ({
     return '未选择文件';
   };
 
+  // 播放列表按钮点击：仅在打开时根据当前播放类型切换视图
+  const handlePlaylistButtonClick = () => {
+    if (!showPlaylist) {
+      if (currentIndex >= 0 && currentIndex < playlist.length) {
+        const file = playlist[currentIndex].file;
+        if (isAudioFile(file)) {
+          setPlaylistViewMode('audio');
+        } else if (isVideoFile(file)) {
+          setPlaylistViewMode('video');
+        }
+      }
+    }
+    setShowPlaylist(!showPlaylist);
+  };
+
   // 根据当前播放文件类型过滤显示的列表与模式标签
 
 
-  if (!isVisible) return null;
+  // 如果控制栏不可见但播放列表打开，则保持显示以避免列表被立即隐藏
+  if (!isVisible && !showPlaylist) return null;
 
   return (
     <div 
       className="control-bar fixed bottom-0 left-0 right-0 bg-transparent z-40 transition-all duration-300"
       style={{ height: '60px' /* 固定高度，减小50% */ }}
-      onMouseEnter={() => setIsVisible(true)}
+      onMouseEnter={() => {
+        setIsVisible(true);
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+        if (mouseMoveTimeoutRef.current) {
+          clearTimeout(mouseMoveTimeoutRef.current);
+        }
+      }}
       onMouseLeave={() => {
         if (isPlaying) {
           setIsVisible(false);
-          setShowPlaylist(false);
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+          }
+          timeoutRef.current = setTimeout(() => {
+            setShowPlaylist(false);
+          }, 5000);
         }
       }}
     >
@@ -491,7 +527,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
           {/* 播放列表按钮 */}
           <div className="relative" ref={playlistRef}>
           <button
-            onClick={() => setShowPlaylist(!showPlaylist)}
+            onClick={handlePlaylistButtonClick}
             className="hover:bg-white/20 rounded transition-colors"
             style={{ padding: 'clamp(4px, 1vw, 8px)' }}
             title="播放列表"
