@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { message } from '@tauri-apps/plugin-dialog';
 
 interface MenuBarProps {
@@ -26,8 +28,11 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(true);
   const menuRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout>();
   const mouseMoveTimeoutRef = useRef<NodeJS.Timeout>();
+  const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const [dropdownPos, setDropdownPos] = useState<{ left: number; top: number; width?: number } | null>(null);
 
   // 简化的菜单结构
   const menuItems: MenuItem[] = [
@@ -155,7 +160,20 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       }
       setActiveMenu(null);
     } else {
-      setActiveMenu(activeMenu === key ? null : key);
+      const nextKey = activeMenu === key ? null : key;
+      setActiveMenu(nextKey);
+      // 计算触发按钮在视口中的位置，用于顶层 Portal 下拉定位
+      if (nextKey) {
+        const btn = menuButtonRefs.current[nextKey];
+        if (btn) {
+          const rect = btn.getBoundingClientRect();
+          setDropdownPos({ left: rect.left, top: rect.bottom, width: rect.width });
+        } else {
+          setDropdownPos(null);
+        }
+      } else {
+        setDropdownPos(null);
+      }
     }
   };
 
@@ -167,7 +185,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
 
   const handleMinimize = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const appWindow = getCurrentWindow();
       await appWindow.minimize();
     } catch (error) {
@@ -177,7 +194,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
 
   const handleMaximize = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const appWindow = getCurrentWindow();
       const isMaximized = await appWindow.isMaximized();
       if (isMaximized) {
@@ -192,7 +208,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
 
   const handleClose = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const appWindow = getCurrentWindow();
       await appWindow.close();
     } catch (error) {
@@ -201,21 +216,42 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
   };
 
   const handleClickOutside = (e: MouseEvent) => {
-    if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    const target = e.target as Node | null;
+    const inMenu = !!(menuRef.current && target && menuRef.current.contains(target));
+    const inDropdown = !!(dropdownRef.current && target && dropdownRef.current.contains(target));
+    if (!inMenu && !inDropdown) {
       setActiveMenu(null);
     }
   };
 
   useEffect(() => {
     if (activeMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('click', handleClickOutside);
       return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener('click', handleClickOutside);
       };
     }
   }, [activeMenu]);
 
-  if (!isVisible) return null;
+  // 顶层下拉位置在窗口变化时同步更新
+  useEffect(() => {
+    const updatePos = () => {
+      if (!activeMenu) return;
+      const btn = menuButtonRefs.current[activeMenu];
+      if (btn) {
+        const rect = btn.getBoundingClientRect();
+        setDropdownPos({ left: rect.left, top: rect.bottom, width: rect.width });
+      }
+    };
+    window.addEventListener('resize', updatePos);
+    window.addEventListener('scroll', updatePos, true);
+    return () => {
+      window.removeEventListener('resize', updatePos);
+      window.removeEventListener('scroll', updatePos, true);
+    };
+  }, [activeMenu]);
+
+  if (!isVisible && !activeMenu) return null;
 
   return (
     <div 
@@ -223,7 +259,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       className="menu-bar bg-gray-900/95 backdrop-blur-md border-b border-gray-700/50 text-white fixed top-0 left-0 right-0 z-50 transition-all duration-300"
       onMouseEnter={() => setIsVisible(true)}
       onMouseLeave={() => {
-        if (autoHide || isPlaying) {
+        if ((autoHide || isPlaying) && !activeMenu) {
           setIsVisible(false);
         }
       }}
@@ -241,35 +277,41 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
                 className="px-3 md:px-4 py-2 text-sm hover:bg-white/20 transition-colors truncate"
                 onClick={() => handleMenuClick(menu.key)}
                 onMouseEnter={() => setIsVisible(true)}
+                ref={(el) => { menuButtonRefs.current[menu.key] = el; }}
               >
                 {menu.label}
               </button>
               
-              {activeMenu === menu.key && menu.items && (
-                <div 
-                  className="menu-dropdown absolute top-full left-0 bg-gray-900/95 backdrop-blur-md border border-gray-700/50 shadow-xl min-w-48 z-50 rounded-b-md mt-1"
-                  onMouseEnter={() => setIsVisible(true)}
-                >
-                  {menu.items.map((item, index: number) => (
-                    'separator' in item ? (
-                      <div key={index} className="border-t border-gray-700/50 my-1" />
-                    ) : (
-                      <button
-                        key={index}
-                        className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-700/50 transition-colors flex justify-between items-center ${
-                          item.disabled ? 'text-gray-500 cursor-not-allowed' : ''
-                        }`}
-                        onClick={() => !item.disabled && item.action && handleMenuItemClick(item.action)}
-                        disabled={item.disabled}
-                      >
-                        <span>{item.label}</span>
-                        {item.shortcut && (
-                          <span className="text-gray-400 text-xs ml-4">{item.shortcut}</span>
-                        )}
-                      </button>
-                    )
-                  ))}
-                </div>
+              {activeMenu === menu.key && menu.items && dropdownPos && createPortal(
+                (
+                  <div
+                    className="menu-dropdown fixed bg-gray-900/95 backdrop-blur-md border border-gray-700/50 shadow-xl z-[1000] rounded-b-md mt-1"
+                    style={{ left: dropdownPos.left, top: dropdownPos.top, minWidth: dropdownPos.width }}
+                    onMouseEnter={() => setIsVisible(true)}
+                    ref={(el) => { dropdownRef.current = el; }}
+                  >
+                    {menu.items.map((item, index: number) => (
+                      'separator' in item ? (
+                        <div key={index} className="border-t border-gray-700/50 my-1" />
+                      ) : (
+                        <button
+                          key={index}
+                          className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-700/50 transition-colors flex justify-between items-center ${
+                            item.disabled ? 'text-gray-500 cursor-not-allowed' : ''
+                          } no-drag`}
+                          onClick={() => !item.disabled && item.action && handleMenuItemClick(item.action)}
+                          disabled={item.disabled}
+                        >
+                          <span>{item.label}</span>
+                          {item.shortcut && (
+                            <span className="text-gray-400 text-xs ml-4">{item.shortcut}</span>
+                          )}
+                        </button>
+                      )
+                    ))}
+                  </div>
+                ),
+                document.body
               )}
             </div>
           ))}

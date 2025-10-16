@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize, LogicalPosition } from '@tauri-apps/api/window';
+import { readFile } from '@tauri-apps/plugin-fs';
 
 interface ImageViewerProps {
   src: string;
@@ -221,12 +222,9 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
 
     // 候选1：convertFileSrc（asset.localhost / asset 协议）
     try {
-      const mod = await import('@tauri-apps/api/core');
-      if ((mod as any)?.convertFileSrc) {
-        const u = (mod as any).convertFileSrc(normalized);
-        console.log('使用 convertFileSrc(core) 生成URL:', u);
-        out.asset = u;
-      }
+      const u = convertFileSrc(normalized);
+      console.log('使用 convertFileSrc(core) 生成URL:', u);
+      out.asset = u;
     } catch (e) {
       console.warn('convertFileSrc 不可用，跳过:', e);
     }
@@ -234,7 +232,6 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     // 候选2：FS 读取生成 blob（按需，可选，避免频繁磁盘IO导致切换卡顿）
     if (options?.includeBlob) {
       try {
-        const { readFile } = await import('@tauri-apps/plugin-fs');
         const bytes = await readFile(normalized);
         const ext = normalized.split('.').pop()?.toLowerCase() || '';
         const mimeMap: Record<string, string> = {

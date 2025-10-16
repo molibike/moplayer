@@ -1,6 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { open } from '@tauri-apps/plugin-dialog';
+import { readFile, readDir } from '@tauri-apps/plugin-fs';
 
 import MenuBar from './components/MenuBar';
 import ControlBar from './components/ControlBar';
@@ -181,10 +184,9 @@ function App() {
   };
   const isAudioPath = (p: string) => /\.(mp3|wav|ogg|flac|aac|m4a|wma)$/i.test(p);
   const isVideoPath = (p: string) => /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v)$/i.test(p);
-  const isImagePath = (p: string) => /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(p);
+  // 移除未使用的辅助函数以消除 TS6133 警告
   const normalizePath = (p: string) => p.replace(/\\/g, '/');
   const createFileFromPath = async (path: string) => {
-    const { readFile } = await import('@tauri-apps/plugin-fs');
     const bytes = await readFile(path);
     const name = normalizePath(path).split('/').pop() || '未命名文件';
     const file = new File([bytes], name, { type: '' });
@@ -196,7 +198,6 @@ function App() {
       const normalized = normalizePath(basePath);
       const dir = normalized.substring(0, normalized.lastIndexOf('/'));
       if (!dir) return;
-      const { readDir } = await import('@tauri-apps/plugin-fs');
       const entries: any[] = await readDir(dir);
       const isAudio = isAudioPath(basePath);
       const isVideo = isVideoPath(basePath);
@@ -562,9 +563,6 @@ function App() {
   const handleOpenFile = async () => {
     try {
       // 优先使用 Tauri 原生文件对话框，确保可获得真实路径
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const { readFile } = await import('@tauri-apps/plugin-fs');
-
       const selected = await open({
         multiple: false,
         filters: [
@@ -705,7 +703,6 @@ function App() {
 
   const handleExit = async () => {
     try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const appWindow = getCurrentWindow();
       await appWindow.close();
     } catch (error) {
@@ -737,7 +734,6 @@ function App() {
         unlisten = await listen<string>('open-file', async (event) => {
           try {
             const path = event.payload;
-            const { readFile } = await import('@tauri-apps/plugin-fs');
             const bytes = await readFile(path);
             const name = path.replace(/\\/g, '/').split('/').pop() || '未命名文件';
             const mime = guessMimeType(path);
@@ -759,11 +755,9 @@ function App() {
   useEffect(() => {
     (async () => {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
         const path = await invoke<string | null>('get_startup_file');
         if (path && typeof path === 'string' && path.length > 0) {
           try {
-            const { readFile } = await import('@tauri-apps/plugin-fs');
             const bytes = await readFile(path);
             const name = path.replace(/\\/g, '/').split('/').pop() || '未命名文件';
             const mime = guessMimeType(path);
