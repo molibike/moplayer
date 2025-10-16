@@ -535,8 +535,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       
       {/* 右侧：音频信息和音波条区域 - 61% 宽度 */}
       <div className="h-full flex flex-col" style={{ width: '61%' }}>
-        {/* 上部：音频信息区域 - 61% 高度 */}
-        <div style={{ height: '61%' }}>
+        {/* 上部：音频信息区域 - 61% 高度（底部安全区10px） */}
+        <div style={{ height: '61%', paddingBottom: '10px' }}>
           <AudioInfo
             fileName={fileName}
             metadata={metadata}
@@ -546,8 +546,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
           />
         </div>
         
-        {/* 下部：音波条区域 - 38% 高度（底部内边距+10px） */}
-        <div style={{ height: '38%', paddingBottom: '10px' }}>
+        {/* 下部：音波条区域 - 38% 高度（底部内边距0） */}
+        <div style={{ height: '38%', paddingBottom: '0px' }}>
             <AudioVisualizer
              audioElement={audioRef.current}
              isPlaying={playerState.isPlaying}

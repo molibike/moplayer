@@ -122,7 +122,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       // 从频率数据中采样
       const dataIndex = Math.floor((i / barCount) * dataArray.length);
       // 确保音波条最低绘制高度为5像素
-      const barHeight = Math.max((dataArray[dataIndex] / 255) * canvas.height, 5);
+      const barHeight = Math.max((dataArray[dataIndex] / 255) * canvas.height, 7);
       
       // 计算颜色（基于频率强度）
       const intensity = dataArray[dataIndex] / 255;
@@ -181,7 +181,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       const amplitude = Math.sin(time + frequency) * 0.5 + 0.5;
       const noise = Math.random() * 0.3;
       // 确保音波条最低绘制高度为5像素
-      const barHeight = Math.max((amplitude + noise) * canvas.height * 0.8, 5);
+      const barHeight = Math.max((amplitude + noise) * canvas.height * 0.8, 7);
       
       const x = i * barWidth;
       const y = canvas.height - barHeight;
