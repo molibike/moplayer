@@ -44,6 +44,8 @@
             "core:window:allow-center",
             "core:window:allow-show",
             "core:window:allow-hide",
+            "core:event:default",
+            "core:event:allow-listen",
             "fs:default",
             "fs:allow-read-file",
             "fs:allow-read-dir",
@@ -200,8 +202,7 @@
         "ext": ["svg"],
         "description": "SVG 图像文件",
         "mimeType": "image/svg+xml"
-      }
-      ,
+      },
       {
         "ext": ["tif", "tiff"],
         "description": "TIFF 图像文件",

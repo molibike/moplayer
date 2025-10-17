@@ -55,14 +55,12 @@ fn list_images_in_dir(file_path: String) -> Vec<String> {
         println!("Parent directory: {:?}", parent);
         
         let mut images = vec![];
+        // 仅图片类扩展（不包含 PDF）
         let exts = [
             "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico",
-            // 扩展的图片与相机 RAW 格式（用于目录中图片列表）
             "tif", "tiff", "heic", "heif",
             "raw", "cr2", "nef", "arw", "dng", "rw2", "orf", "raf", "sr2",
-            "wmf",
-            // 将 PDF 也纳入图片浏览列表（每页按图片渲染）
-            "pdf"
+            "wmf"
         ];
         
         if let Ok(entries) = fs::read_dir(parent) {
@@ -85,6 +83,39 @@ fn list_images_in_dir(file_path: String) -> Vec<String> {
         images.sort();
         println!("Returning {} images", images.len());
         images
+    } else {
+        println!("No parent directory found");
+        vec![]
+    }
+}
+
+#[command]
+fn list_pdfs_in_dir(file_path: String) -> Vec<String> {
+    use std::path::Path;
+    use std::fs;
+
+    println!("list_pdfs_in_dir called with: {}", file_path);
+
+    let path = Path::new(&file_path);
+    if let Some(parent) = path.parent() {
+        let mut pdfs = vec![];
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+                        if ext.to_lowercase() == "pdf" {
+                            let full_path = p.to_string_lossy().to_string();
+                            println!("Found pdf: {}", full_path);
+                            pdfs.push(full_path);
+                        }
+                    }
+                }
+            }
+        }
+        pdfs.sort();
+        println!("Returning {} pdfs", pdfs.len());
+        pdfs
     } else {
         println!("No parent directory found");
         vec![]
@@ -156,6 +187,7 @@ fn main() {
             get_player_status,
             seek_to,
             list_images_in_dir,
+            list_pdfs_in_dir,
             set_window_size,
             get_screen_size,
             open_file,
