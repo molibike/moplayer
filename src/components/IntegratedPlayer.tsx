@@ -82,9 +82,10 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     return false;
   };
 
-  // 检测是否为图片文件
+  // 检测是否为图片文件（扩展更多格式，排除 PDF）
   const isImageFile = (src: string, fileName?: string, fileBlob?: File): boolean => {
-    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.ico'];
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.ico',
+      '.tif', '.tiff', '.heic', '.heif', '.raw', '.cr2', '.nef', '.arw', '.dng', '.rw2', '.orf', '.raf', '.sr2', '.exif', '.wmf'];
     const imageMimePrefix = 'image/';
     
     // 先检查文件Blob的MIME
@@ -111,9 +112,23 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     return false;
   };
 
+  // 检测是否为 PDF 文件
+  const isPdfFile = (src: string, fileName?: string, fileBlob?: File): boolean => {
+    if (fileBlob && typeof fileBlob.type === 'string') {
+      if (fileBlob.type === 'application/pdf') return true;
+    }
+    if (fileName) {
+      const extension = fileName.toLowerCase().substring(fileName.lastIndexOf('.'));
+      if (extension === '.pdf') return true;
+    }
+    const srcExtension = src.toLowerCase().substring(src.lastIndexOf('.'));
+    return srcExtension === '.pdf';
+  };
+
   // 判断当前文件类型
   const isAudio = isAudioFile(src, fileName, fileBlob);
   const isImage = isImageFile(src, fileName, fileBlob);
+  const isPdf = isPdfFile(src, fileName, fileBlob);
 
   // 处理src变化时的状态重置
   useEffect(() => {
@@ -348,6 +363,27 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
       <ImageViewer
         src={src}
         fileName={fileName || '未知图片'}
+        filePath={filePath}
+        fileBlob={fileBlob}
+        onStateChange={onStateChange}
+        onError={onError}
+        onPlayPause={externalPlayPause}
+        onVolumeUp={externalVolumeUp}
+        onVolumeDown={externalVolumeDown}
+        onMute={externalMute}
+        onSeekForward={externalSeekForward}
+        onSeekBackward={externalSeekBackward}
+        onSeekTo={externalSeekTo}
+      />
+    );
+  }
+
+  // 如果是 PDF 文件，按图片查看器渲染首页，并支持翻页
+  if (isPdf) {
+    return (
+      <ImageViewer
+        src={src}
+        fileName={fileName || 'PDF 文档'}
         filePath={filePath}
         fileBlob={fileBlob}
         onStateChange={onStateChange}

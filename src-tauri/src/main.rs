@@ -55,7 +55,15 @@ fn list_images_in_dir(file_path: String) -> Vec<String> {
         println!("Parent directory: {:?}", parent);
         
         let mut images = vec![];
-        let exts = ["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico"];
+        let exts = [
+            "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico",
+            // 扩展的图片与相机 RAW 格式（用于目录中图片列表）
+            "tif", "tiff", "heic", "heif",
+            "raw", "cr2", "nef", "arw", "dng", "rw2", "orf", "raf", "sr2",
+            "wmf",
+            // 将 PDF 也纳入图片浏览列表（每页按图片渲染）
+            "pdf"
+        ];
         
         if let Ok(entries) = fs::read_dir(parent) {
             for entry in entries.flatten() {

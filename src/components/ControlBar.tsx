@@ -94,7 +94,11 @@ const ControlBar: React.FC<ControlBarProps> = ({
 
   const isImageFile = (file: File) => {
     return file.type.startsWith('image/') || 
-           /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(file.name);
+           /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico|tif|tiff|heic|heif|wmf|exif|raw|cr2|nef|arw|dng|rw2|orf|raf|sr2)$/i.test(file.name);
+  };
+
+  const isPdfFile = (file: File) => {
+    return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
   };
 
 
@@ -102,7 +106,8 @@ const ControlBar: React.FC<ControlBarProps> = ({
   // 检测当前播放项是否为图片
   const isCurrentImage = () => {
     if (currentIndex < 0 || currentIndex >= playlist.length) return false;
-    return isImageFile(playlist[currentIndex].file);
+    const f = playlist[currentIndex].file;
+    return isImageFile(f) || isPdfFile(f);
   };
 
   // 根据播放列表显示模式过滤列表
@@ -457,7 +462,8 @@ const ControlBar: React.FC<ControlBarProps> = ({
               // 打开文件选择对话框
               const input = document.createElement('input');
               input.type = 'file';
-              input.accept = 'video/*,audio/*';
+              // 恢复包含 PDF 与图片的默认可选格式
+              input.accept = 'video/*,audio/*,image/*,application/pdf,.pdf';
               input.multiple = false; // 单文件选择，立即播放
               input.onchange = (e) => {
                 const files = Array.from((e.target as HTMLInputElement).files || []);
@@ -584,7 +590,8 @@ const ControlBar: React.FC<ControlBarProps> = ({
                     onClick={() => {
                       const input = document.createElement('input');
                       input.type = 'file';
-                      input.accept = 'video/*,audio/*';
+                      // 支持视频、音频、图片与 PDF
+                      input.accept = 'video/*,audio/*,image/*,application/pdf,.pdf';
                       input.multiple = true;
                       input.onchange = (e) => {
                         const files = Array.from((e.target as HTMLInputElement).files || []);

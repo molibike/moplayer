@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow, LogicalSize, LogicalPosition } from '@tauri-apps/api/window';
 import { readFile } from '@tauri-apps/plugin-fs';
+import * as exifr from 'exifr';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/build/pdf';
+import workerSrc from 'pdfjs-dist/build/pdf.worker.min.js?url';
 
 interface ImageViewerProps {
   src: string;
@@ -46,6 +49,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   onSeekBackward: externalSeekBackward,
   onSeekTo: externalSeekTo,
 }) => {
+  // 配置 PDF.js worker 为打包可解析的 URL，避免加载失败
+  (GlobalWorkerOptions as any).workerSrc = workerSrc as unknown as string;
   const imageRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [imageInfo, setImageInfo] = useState<ImageInfo | null>(null);
@@ -59,7 +64,17 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const [currentImageIndex, setCurrentImageIndex] = useState(-1);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   // 用内部状态驱动 <img src>，避免直接修改 DOM 导致 React 反复覆盖引起闪烁
-  const [activeSrc, setActiveSrc] = useState<string>(src);
+  const [activeSrc, setActiveSrc] = useState<string>(() => {
+    const s = src || '';
+    const isBlob = typeof s === 'string' && s.startsWith('blob:');
+    const blobType = (fileBlob as any)?.type;
+    const isPdfInit =
+      (isBlob && blobType === 'application/pdf') ||
+      (!!fileName && fileName.toLowerCase().endsWith('.pdf')) ||
+      (!!filePath && filePath.toLowerCase().endsWith('.pdf')) ||
+      (!!s && s.toLowerCase().endsWith('.pdf'));
+    return isPdfInit ? '' : s;
+  });
   const prevActiveSrcRef = useRef<string>(src);
   const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [screenSize, setScreenSize] = useState({ width: 1920, height: 1080 });
@@ -71,9 +86,19 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const lockedWindowSizeRef = useRef<{ width: number; height: number } | null>(null);
   // 控制目录列表的初始化加载，仅在首次或外部文件变更时加载
   const listInitializedRef = useRef(false);
+  // 记录最近一次成功加载目录列表的路径，避免重复加载
+  const lastLoadedPathRef = useRef<string | null>(null);
   // 操作提示显示控制：鼠标在底部20%区域停留时显示
   const [hintVisible, setHintVisible] = useState(false);
   const hintTimerRef = useRef<number | null>(null);
+  // PDF 渲染状态
+  const [isPdfFileMode, setIsPdfFileMode] = useState(false);
+  const pdfDocRef = useRef<any>(null);
+  const [pdfPageCount, setPdfPageCount] = useState(0);
+  const [pdfCurrentPage, setPdfCurrentPage] = useState(1);
+  const pdfImageUrlRef = useRef<string | null>(null);
+  const errorFallbackRef = useRef<{ path: string | null; tried: { asset?: boolean; blob?: boolean; file?: boolean } } | null>(null);
+  const attemptingPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     imageInfoRef.current = imageInfo;
@@ -87,10 +112,65 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     scaleRef.current = scale;
   }, [scale]);
 
-  // 外部传入的 src 变化时，同步到内部显示源
+  // 统一的 PDF 检测：支持 fileBlob、fileName、路径和 src
+  const detectPdf = useCallback((inferredPath: string | null): boolean => {
+    // 路径为最高优先级：若可用则直接以路径扩展名为准
+    const pathCandidate = (() => {
+      if (inferredPath && inferredPath.length > 0) return inferredPath;
+      if (attemptingPathRef.current && attemptingPathRef.current.length > 0) return attemptingPathRef.current;
+      if (currentFilePath && currentFilePath.length > 0) return currentFilePath;
+      if (filePath && filePath.length > 0) return filePath.replace(/\\/g, '/');
+      return null;
+    })();
+    if (pathCandidate) {
+      return pathCandidate.toLowerCase().endsWith('.pdf');
+    }
+
+    // 其次使用拖入的文件类型
+    if (fileBlob && typeof fileBlob.type === 'string') {
+      return fileBlob.type === 'application/pdf';
+    }
+
+    // 最后才根据外部 src / fileName 猜测
+    if (src && src.toLowerCase().endsWith('.pdf')) return true;
+    if (fileName && fileName.toLowerCase().endsWith('.pdf')) return true;
+    return false;
+  }, [currentFilePath, filePath, fileBlob, fileName, src]);
+
+  // 外部传入的 src 变化时，同步到内部显示源（不因内部切换 currentFilePath 而回退）
   useEffect(() => {
-    setActiveSrc(src || '');
-  }, [src]);
+    // 若是 blob URL，优先依据 fileBlob 类型直接决定
+    if (src && src.startsWith('blob:')) {
+      const isPdfByBlob = fileBlob && typeof fileBlob.type === 'string' ? fileBlob.type === 'application/pdf' : false;
+      setActiveSrc(isPdfByBlob ? '' : (src || ''));
+      return;
+    }
+    // 仅基于 src 推断（避免依赖 currentFilePath/filePath 导致内部切换被覆盖）
+    const inferred = src && src.startsWith('file://') ? src.substring(7) : null;
+    const isPdf = detectPdf(inferred);
+    setActiveSrc(isPdf ? '' : (src || ''));
+  }, [src, detectPdf, fileBlob]);
+
+  // 推断当前文件路径（用于 PDF 判断）
+  const getInferredPath = useCallback(() => {
+    // 优先使用正在尝试加载的路径
+    if (attemptingPathRef.current && attemptingPathRef.current.length > 0) return attemptingPathRef.current.replace(/\\/g, '/');
+    // 再次使用内部维护的 currentFilePath，避免被旧的 blob/fileBlob 路径覆盖
+    if (currentFilePath) return currentFilePath;
+    // 其次使用父组件传入的 filePath
+    if (filePath && filePath.length > 0) return filePath.replace(/\\/g, '/');
+    // 当 src 为 blob 且存在 fileBlob 时，作为兜底来源
+    if (src && src.startsWith('blob:') && fileBlob) {
+      const anyFile = fileBlob as any;
+      const blobPath: string | undefined = typeof anyFile.path === 'string' && anyFile.path.length > 0
+        ? anyFile.path
+        : (fileBlob.webkitRelativePath || undefined);
+      if (blobPath) return blobPath.replace(/\\/g, '/');
+    }
+    // 最后从 src 的 file:// 方案提取
+    if (src && src.startsWith('file://')) return src.substring(7);
+    return null;
+  }, [currentFilePath, filePath, src, fileBlob]);
 
   // 释放旧的 blob URL，避免内存泄漏
   useEffect(() => {
@@ -105,15 +185,151 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     if (filePath) {
       const normalizedPath = filePath.replace(/\\/g, '/');
       setCurrentFilePath(normalizedPath);
-      // 外部文件路径变更：重新加载目录图片列表（一次性）
+      // 避免对同一路径重复加载，提高稳定性
       try {
-        loadImageList(normalizedPath);
+        if (lastLoadedPathRef.current !== normalizedPath) {
+          loadImageList(normalizedPath);
+          lastLoadedPathRef.current = normalizedPath;
+        }
         listInitializedRef.current = true;
       } catch (e) {
         console.warn('根据新的 filePath 加载目录图片列表失败:', e);
       }
     }
   }, [filePath]);
+
+  // 将指定 PDF 页面渲染成图片 URL，并设置为 activeSrc（提前声明以供下方依赖使用）
+  const renderPdfPage = useCallback(async (pageNum: number) => {
+    const doc = pdfDocRef.current;
+    if (!doc) return;
+    const p = Math.max(1, Math.min(pageNum, doc.numPages));
+    try {
+      const page = await doc.getPage(p);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      const ctx = canvas.getContext('2d', { alpha: false });
+      if (!ctx) throw new Error('无法获取 Canvas 上下文');
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const blob: Blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(b => b ? resolve(b) : reject(new Error('canvas.toBlob 失败')), 'image/png');
+      });
+      const url = URL.createObjectURL(blob);
+      if (pdfImageUrlRef.current) {
+        try { URL.revokeObjectURL(pdfImageUrlRef.current); } catch {}
+      }
+      pdfImageUrlRef.current = url;
+      setActiveSrc(url);
+      setPdfCurrentPage(p);
+      if (onError) onError('');
+    } catch (e) {
+      console.error('渲染 PDF 页面失败:', e);
+      if (onError) onError('渲染 PDF 页面失败');
+    }
+  }, [onError]);
+
+  // 当当前文件为 PDF 时，初始化 PDF 文档并渲染首页
+  useEffect(() => {
+    const path = getInferredPath();
+    attemptingPathRef.current = path || attemptingPathRef.current;
+    const isPdf = detectPdf(path);
+    setIsPdfFileMode(isPdf);
+
+    if (!isPdf) {
+      // 清理 PDF 相关状态
+      if (pdfDocRef.current && typeof pdfDocRef.current.destroy === 'function') {
+        pdfDocRef.current.destroy().catch(() => {});
+      }
+      pdfDocRef.current = null;
+      setPdfPageCount(0);
+      setPdfCurrentPage(1);
+      if (pdfImageUrlRef.current) {
+        try { URL.revokeObjectURL(pdfImageUrlRef.current); } catch {}
+        pdfImageUrlRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const initPdf = async () => {
+      try {
+        let bytes: ArrayBuffer | Uint8Array | null = null;
+        // 1) 优先使用当前路径（Tauri 环境从磁盘读取）
+        if (path && path.toLowerCase().endsWith('.pdf')) {
+          try {
+            const buf = await readFile(path);
+            bytes = buf as Uint8Array;
+          } catch (fsErr) {
+            console.warn('读取 PDF 路径失败，尝试其他来源:', fsErr);
+          }
+        }
+        // 2) 其次使用拖入的文件 Blob（仅当其确为 PDF）
+        if (!bytes && fileBlob && typeof fileBlob.type === 'string' && fileBlob.type === 'application/pdf') {
+          try {
+            bytes = await fileBlob.arrayBuffer();
+          } catch (blobErr) {
+            console.warn('读取 fileBlob 失败:', blobErr);
+          }
+        }
+        // 3) 最后尝试从 src（blob/http）拉取
+        if (!bytes && src) {
+          try {
+            const resp = await fetch(src);
+            if (resp.ok) {
+              bytes = await resp.arrayBuffer();
+            }
+          } catch (fetchErr) {
+            // 忽略，统一在下面报错
+          }
+        }
+
+        if (!bytes) {
+          throw new Error('无法获取 PDF 数据');
+        }
+
+        const loadingTask = (getDocument as any)({ data: bytes, disableWorker: true });
+        const doc = await loadingTask.promise;
+        if (cancelled) {
+          try { await doc.destroy(); } catch {}
+          return;
+        }
+        pdfDocRef.current = doc;
+        setPdfPageCount(doc.numPages);
+        setPdfCurrentPage(1);
+
+        // 初始化同目录图片/文档列表（PDF场景不会触发 <img> 的 onLoad）
+        if (path) {
+          const normalizedPath = path.replace(/\\/g, '/');
+          try {
+            setCurrentFilePath(normalizedPath);
+            await loadImageList(normalizedPath);
+            console.log('PDF 初始化后完成目录列表加载');
+          } catch (listErr) {
+            console.warn('PDF 初始化后加载目录列表失败:', listErr);
+          }
+        }
+
+        await renderPdfPage(1);
+      } catch (e) {
+        console.error('加载 PDF 失败:', e);
+        if (onError) onError('加载 PDF 失败');
+      }
+    };
+
+    // 清理旧状态并初始化
+    if (pdfDocRef.current && typeof pdfDocRef.current.destroy === 'function') {
+      pdfDocRef.current.destroy().catch(() => {});
+    }
+    pdfDocRef.current = null;
+    if (pdfImageUrlRef.current) {
+      try { URL.revokeObjectURL(pdfImageUrlRef.current); } catch {}
+      pdfImageUrlRef.current = null;
+    }
+    initPdf();
+
+    return () => { cancelled = true; };
+  }, [getInferredPath, detectPdf, onError, renderPdfPage, fileBlob, src]);
 
   const updateContainerSize = useCallback(() => {
     if (!containerRef.current) return;
@@ -220,13 +436,22 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     const normalized = path.replace(/\\/g, '/');
     const out: { asset?: string; blob?: string; file: string } = { file: `file://${normalized}` };
 
-    // 候选1：convertFileSrc（asset.localhost / asset 协议）
-    try {
-      const u = convertFileSrc(normalized);
-      console.log('使用 convertFileSrc(core) 生成URL:', u);
-      out.asset = u;
-    } catch (e) {
-      console.warn('convertFileSrc 不可用，跳过:', e);
+    // 候选1：convertFileSrc（asset.localhost / asset 协议）仅在 Tauri 环境启用
+    const isTauri = (() => {
+      if (windowRef.current) return true;
+      if (typeof window === 'undefined') return false;
+      const win = window as any;
+      return typeof win.__TAURI__ !== 'undefined' || typeof win.__TAURI_IPC__ !== 'undefined';
+    })();
+
+    if (isTauri) {
+      try {
+        const u = convertFileSrc(normalized);
+        console.log('使用 convertFileSrc(core) 生成URL:', u);
+        out.asset = u;
+      } catch (e) {
+        console.warn('convertFileSrc 不可用，跳过:', e);
+      }
     }
 
     // 候选2：FS 读取生成 blob（按需，可选，避免频繁磁盘IO导致切换卡顿）
@@ -235,7 +460,10 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         const bytes = await readFile(normalized);
         const ext = normalized.split('.').pop()?.toLowerCase() || '';
         const mimeMap: Record<string, string> = {
-          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon'
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon',
+          tif: 'image/tiff', tiff: 'image/tiff', heic: 'image/heic', heif: 'image/heif',
+          cr2: 'image/x-canon-cr2', nef: 'image/x-nikon-nef', arw: 'image/x-sony-arw', dng: 'image/x-adobe-dng', rw2: 'image/x-panasonic-rw2', orf: 'image/x-olympus-orf', raf: 'image/x-fuji-raf', sr2: 'image/x-sony-sr2',
+          exif: 'image/jpeg', raw: 'application/octet-stream', wmf: 'application/x-msmetafile', pdf: 'application/pdf'
         };
         const mime = mimeMap[ext] || 'application/octet-stream';
         const blob = new Blob([bytes], { type: mime });
@@ -256,6 +484,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     if (!needInit) return;
 
     const inferredPath = (() => {
+      if (attemptingPathRef.current) return attemptingPathRef.current;
       if (currentFilePath) return currentFilePath;
       if (filePath && filePath.length > 0) return filePath;
       if (src && src.startsWith('file://')) return src.substring(7);
@@ -263,12 +492,14 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     })();
 
     if (!inferredPath) return;
+    // PDF 文件由专用逻辑初始化，不在此处设置 activeSrc
+    if (detectPdf(inferredPath)) return;
 
     let mounted = true;
     (async () => {
       try {
-        const candidates = await buildCandidateUrls(inferredPath, { includeBlob: false });
-        const next = candidates.asset || candidates.blob || candidates.file || '';
+        const candidates = await buildCandidateUrls(inferredPath, { includeBlob: true });
+        const next = candidates.blob || candidates.asset || candidates.file || '';
         if (mounted && next) {
           setActiveSrc(next);
         }
@@ -278,12 +509,17 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     })();
 
     return () => { mounted = false; };
-  }, [activeSrc, currentFilePath, filePath, src, buildCandidateUrls]);
+  }, [activeSrc, currentFilePath, filePath, src, buildCandidateUrls, detectPdf]);
 
   // 额外回退：当 activeSrc 为空且存在 fileBlob 时，直接使用 fileBlob 生成的 blob URL
   useEffect(() => {
     const needInit = !activeSrc || activeSrc.length === 0;
     if (!needInit || !fileBlob) return;
+    // 若当前内容为 PDF，禁止使用 <img> 的 blob 回退，避免闪烁/错误图标
+    const inferred = getInferredPath();
+    const isPdf = detectPdf(inferred);
+    const blobType = (fileBlob as any)?.type;
+    if (isPdf || blobType === 'application/pdf') return;
     try {
       const u = URL.createObjectURL(fileBlob);
       setActiveSrc(u);
@@ -291,38 +527,63 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     } catch (e) {
       console.warn('根据 fileBlob 生成 blob URL 失败:', e);
     }
-  }, [activeSrc, fileBlob]);
+  }, [activeSrc, fileBlob, getInferredPath, detectPdf]);
 
   // 获取同目录下的图片列表
   const loadImageList = useCallback(async (filePath: string) => {
+    const normalizedFilePath = filePath.replace(/\\/g, '/');
     try {
+      // 非 Tauri 环境不调用后端，避免控制台出现 invoke 相关报错
+      const isTauri = (() => {
+        if (windowRef.current) return true;
+        if (typeof window === 'undefined') return false;
+        const win = window as any;
+        return typeof win.__TAURI__ !== 'undefined' || typeof win.__TAURI_IPC__ !== 'undefined';
+      })();
+
+      if (!isTauri) {
+        setImageList(filePath ? [normalizedFilePath] : []);
+        setCurrentImageIndex(0);
+        lastLoadedPathRef.current = normalizedFilePath;
+        listInitializedRef.current = true;
+        return;
+      }
       console.log('=== 开始加载图片列表 ===');
       console.log('文件路径:', filePath);
       console.log('环境判定（使用窗口实例）:', !!windowRef.current);
 
       // 直接调用 Tauri 后端，失败时按非 Tauri 环境处理
-      const list = await invoke<string[]>('list_images_in_dir', { filePath });
+      const list = await invoke<string[]>('list_images_in_dir', { filePath: normalizedFilePath });
       console.log('Tauri 后端返回:');
       console.log('- 图片数量:', list.length);
       console.log('- 图片列表:', list);
 
-      setImageList(list);
+      // 规范化分隔符，避免 Windows 下反斜杠导致索引匹配失败
+      const normalizedList = list.map(p => p.replace(/\\/g, '/'));
+      const dedupedList = Array.from(new Set(normalizedList));
+      setImageList(dedupedList);
 
       // 找到当前图片在列表中的索引
-      const index = list.indexOf(filePath);
+      const index = dedupedList.findIndex(p => p === normalizedFilePath);
       console.log('- 当前图片索引:', index);
       console.log('- 查找的文件路径:', filePath);
       setCurrentImageIndex(index >= 0 ? index : 0);
 
       console.log('=== 图片列表加载完成 ===');
+       lastLoadedPathRef.current = normalizedFilePath;
+       listInitializedRef.current = true;
     } catch (error) {
       console.error('=== 加载图片列表失败（可能非 Tauri 环境）===');
       console.error('错误详情:', error);
       // 在非 Tauri 环境下至少保留当前文件作为唯一项，避免列表被错误清空
-      setImageList(filePath ? [filePath] : []);
-      setCurrentImageIndex(0);
+       setImageList(filePath ? [normalizedFilePath] : []);
+       setCurrentImageIndex(0);
+       lastLoadedPathRef.current = normalizedFilePath;
+       listInitializedRef.current = true;
     }
   }, []);
+
+  
 
 
 
@@ -495,7 +756,6 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
   }, [screenSize]);
 
-  // ... rest of the code remains the same ...
   // 图片加载完成处理 - 修复居中显示问题
   const handleImageLoad = () => {
     const img = imageRef.current;
@@ -515,21 +775,32 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     resetImageToFitWindow(naturalWidth, naturalHeight);
 
     const inferredPath = (() => {
+      // 优先使用正在尝试加载的路径，避免旧 blob 覆盖
+      if (attemptingPathRef.current) return attemptingPathRef.current;
+      // 其次使用内部 currentFilePath，确保切换后的路径不被旧的 blob 覆盖
       if (currentFilePath) return currentFilePath;
+      // 再次使用父组件的 filePath
       if (filePath && filePath.length > 0) return filePath;
+      // 当 src 是 blob 且存在 fileBlob 路径信息时作为兜底
+      if (src.startsWith('blob:') && fileBlob) {
+        const anyFile = fileBlob as any;
+        const p = typeof anyFile.path === 'string' && anyFile.path.length > 0 ? anyFile.path : (fileBlob.webkitRelativePath || '');
+        if (p && p.length > 0) return p;
+      }
       if (src.startsWith('file://')) {
         return src.substring(7);
       }
       return null;
     })();
 
-    // 仅在首次或外部文件变更后第一次加载时初始化目录列表
-    if (!listInitializedRef.current && inferredPath) {
+    // 初始化或路径变化时加载同目录文件列表
+    if (inferredPath) {
       const normalizedPath = inferredPath.replace(/\\/g, '/');
       setCurrentFilePath(normalizedPath);
-      console.log('初次加载同目录图片列表，文件路径:', normalizedPath);
-      loadImageList(normalizedPath);
-      listInitializedRef.current = true;
+      if (!listInitializedRef.current || lastLoadedPathRef.current !== normalizedPath) {
+        console.log('加载同目录文件列表，文件路径:', normalizedPath);
+        loadImageList(normalizedPath);
+      }
     }
     
     console.log('图片加载完成:', fileName, '尺寸:', naturalWidth, '×', naturalHeight);
@@ -560,22 +831,47 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     const newImagePath = imageList[newIndex];
     if (newImagePath) {
       console.log('切换图片路径:', newImagePath);
+      attemptingPathRef.current = newImagePath;
       
       // 更新索引和路径
       setCurrentImageIndex(newIndex);
       setCurrentFilePath(newImagePath);
+      const isPdfTarget = newImagePath.toLowerCase().endsWith('.pdf');
       
-      // 创建新的图片URL并更新（带失败回退），仅通过状态更新 src，避免直接改 DOM
+      // 针对目标类型分别处理，避免 PDF 被当成 <img> 加载导致闪烁
       try {
-        const candidates = await buildCandidateUrls(newImagePath, { includeBlob: false });
-        // 清理旧的 blob URL（由 activeSrc 统一管理）
-        if (activeSrc.startsWith('blob:')) {
-          try { URL.revokeObjectURL(activeSrc); } catch {}
-        }
+        // 切换到 PDF：交由 PDF 初始化流程处理（activeSrc 置空，触发专用渲染）
+        if (isPdfTarget) {
+          // 清理旧的 blob URL
+          if (activeSrc.startsWith('blob:')) {
+            try { URL.revokeObjectURL(activeSrc); } catch {}
+          }
+          // 切换到 PDF 模式并重置图片信息
+          setIsPdfFileMode(true);
+          setImageInfo(null);
+          setActiveSrc('');
+        } else {
+          // 切换到图片：确保退出 PDF 模式并销毁旧 PDF 状态
+          if (pdfDocRef.current && typeof pdfDocRef.current.destroy === 'function') {
+            try { await pdfDocRef.current.destroy(); } catch {}
+          }
+          pdfDocRef.current = null;
+          setIsPdfFileMode(false);
+          if (pdfImageUrlRef.current) {
+            try { URL.revokeObjectURL(pdfImageUrlRef.current); } catch {}
+            pdfImageUrlRef.current = null;
+          }
 
-        setImageInfo(null);
-        const nextSrc = candidates.asset || candidates.blob || candidates.file || '';
-        setActiveSrc(nextSrc);
+          const candidates = await buildCandidateUrls(newImagePath, { includeBlob: true });
+          // 清理旧的 blob URL（由 activeSrc 统一管理）
+          if (activeSrc.startsWith('blob:')) {
+            try { URL.revokeObjectURL(activeSrc); } catch {}
+          }
+
+          setImageInfo(null);
+          const nextSrc = candidates.blob || candidates.asset || candidates.file || '';
+          setActiveSrc(nextSrc);
+        }
 
         // 通知父组件图片已切换
         if (onStateChange) {
@@ -592,6 +888,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
           const preloadIndexPrev = (newIndex - 1 + imageList.length) % imageList.length;
           const preloadPaths = [imageList[preloadIndexNext], imageList[preloadIndexPrev]].filter(Boolean) as string[];
           for (const p of preloadPaths) {
+            // 跳过 PDF 的预加载，避免无效的 <img> 请求错误
+            if (p.toLowerCase().endsWith('.pdf')) continue;
             const c = await buildCandidateUrls(p, { includeBlob: false });
             const u = c.asset || c.file;
             if (u) {
@@ -614,17 +912,78 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
   }, [currentImageIndex, imageList, activeSrc, onStateChange]);
 
+  // PDF 翻页：优先在 PDF 内翻页，边界时切换目录文件
+  const switchPdfPage = useCallback(async (direction: 'prev' | 'next') => {
+    const doc = pdfDocRef.current;
+    if (!doc) return;
+    const cur = pdfCurrentPage;
+    const count = doc.numPages;
+    if (direction === 'next') {
+      if (cur < count) {
+        await renderPdfPage(cur + 1);
+      } else {
+        await switchImage('next');
+      }
+    } else {
+      if (cur > 1) {
+        await renderPdfPage(cur - 1);
+      } else {
+        await switchImage('prev');
+      }
+    }
+  }, [pdfCurrentPage, renderPdfPage, switchImage]);
+
   // 初始加载失败时的回退处理（asset -> blob -> file）
   const handleInitialImageError = useCallback(async () => {
     const img = imageRef.current;
     if (!img) return;
-
-    const inferredPath = (() => {
+    // PDF 模式：禁止图片回退逻辑，等待专用渲染流程
+    const inferredPathForErr = (() => {
+      if (attemptingPathRef.current) return attemptingPathRef.current;
       if (currentFilePath) return currentFilePath;
       if (filePath && filePath.length > 0) return filePath;
       if (src && src.startsWith('file://')) return src.substring(7);
       return null;
     })();
+
+    const isCurrentPdf = detectPdf(inferredPathForErr);
+    if (isPdfFileMode || isCurrentPdf) {
+      // 如果 PDF 文档已就绪，尝试渲染当前页；否则静默返回，等待初始化完成
+      if (pdfDocRef.current) {
+        await renderPdfPage(pdfCurrentPage || 1);
+      }
+      return;
+    }
+
+    // 非 Tauri 环境：不尝试 asset.localhost/file://，仅使用拖拽的 blob 或静默停止
+    {
+      const isTauri = (() => {
+        if (windowRef.current) return true;
+        if (typeof window === 'undefined') return false;
+        const win = window as any;
+        return typeof win.__TAURI__ !== 'undefined' || typeof win.__TAURI_IPC__ !== 'undefined';
+      })();
+      if (!isTauri) {
+        if (fileBlob && (fileBlob as any)?.type !== 'application/pdf') {
+          try {
+            const u = URL.createObjectURL(fileBlob);
+            if (u && u !== activeSrc) {
+              setActiveSrc(u);
+              console.log('非 Tauri 环境，回退到 fileBlob 的 blob URL');
+              return;
+            }
+          } catch (e) {
+            console.warn('非 Tauri 环境生成 blob URL 失败:', e);
+          }
+        }
+        console.warn('非 Tauri 环境无法访问本地文件路径，停止图片回退循环');
+        setActiveSrc('');
+        onError?.('图片加载失败');
+        return;
+      }
+    }
+
+    const inferredPath = inferredPathForErr;
 
     if (!inferredPath) {
       // 优先尝试使用 fileBlob 作为回退
@@ -646,43 +1005,103 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
 
     try {
+      // 记录当前路径的回退尝试，避免 asset/bloc/file 循环切换
+      const state = errorFallbackRef.current;
+      if (!state || state.path !== inferredPath) {
+        errorFallbackRef.current = { path: inferredPath, tried: {} };
+      }
+      const tried = errorFallbackRef.current!.tried;
+
       const candidates = await buildCandidateUrls(inferredPath, { includeBlob: true });
-      const current = activeSrc;
 
-      const trySet = (next?: string) => {
-        if (!next || next === current) return false;
-        setActiveSrc(next);
-        return true;
-      };
+      if (!tried.asset && candidates.asset && candidates.asset !== activeSrc) {
+        tried.asset = true;
+        setActiveSrc(candidates.asset);
+        console.log('初始加载失败（回退一次）：asset URL');
+        return;
+      }
+      if (!tried.blob && candidates.blob && candidates.blob !== activeSrc) {
+        tried.blob = true;
+        setActiveSrc(candidates.blob);
+        console.log('初始加载失败（回退一次）：blob URL');
+        return;
+      }
+      if (!tried.file && candidates.file && candidates.file !== activeSrc) {
+        tried.file = true;
+        setActiveSrc(candidates.file);
+        console.log('初始加载失败（回退一次）：file:// URL');
+        return;
+      }
 
-      // 依次尝试 asset -> blob -> file（跳过与当前src相同的项）
-      if (trySet(candidates.asset)) {
-        console.log('初始加载失败，回退到 asset URL');
-        return;
-      }
-      if (trySet(candidates.blob)) {
-        console.log('初始加载失败，回退到 blob URL');
-        return;
-      }
-      if (trySet(candidates.file)) {
-        console.log('初始加载失败，回退到 file:// URL');
-        return;
-      }
+      // 优先使用 exifr 提取嵌入的缩略图；失败时再手动扫描 JPEG
+      try {
+        const bytes = await readFile(inferredPath);
+        let thumbBuffer: ArrayBuffer | null = null;
+        try {
+          thumbBuffer = await (exifr as any).thumbnailBuffer(bytes.buffer);
+        } catch (exErr) {
+          console.warn('exifr 提取缩略图失败，尝试手动扫描 JPEG:', exErr);
+        }
+
+        if (thumbBuffer) {
+          const blob = new Blob([thumbBuffer], { type: 'image/jpeg' });
+          const url = URL.createObjectURL(blob);
+          if (url && url !== activeSrc) {
+            setActiveSrc(url);
+            console.log('使用 exifr 提取的嵌入缩略图作为回退');
+            return;
+          }
+        } else {
+          const u8 = new Uint8Array(bytes);
+          const findJpegThumbnail = (data: Uint8Array): Blob | null => {
+            const starts: number[] = [];
+            const ends: number[] = [];
+            for (let i = 0; i < data.length - 1; i++) {
+              const b0 = data[i];
+              const b1 = data[i + 1];
+              if (b0 === 0xff && b1 === 0xd8) starts.push(i);
+              if (b0 === 0xff && b1 === 0xd9) ends.push(i + 2);
+            }
+            let best: { s: number; e: number } | null = null;
+            for (const s of starts) {
+              const e = ends.find((x) => x > s);
+              if (typeof e === 'number') {
+                if (!best || e - s > best.e - best.s) best = { s, e };
+              }
+            }
+            if (best) {
+              const slice = data.slice(best.s, best.e);
+              return new Blob([slice], { type: 'image/jpeg' });
+            }
+            return null;
+          };
+
+          const thumb = findJpegThumbnail(u8);
+          if (thumb) {
+            const url = URL.createObjectURL(thumb);
+            if (url && url !== activeSrc) {
+              setActiveSrc(url);
+              console.log('从文件中提取嵌入 JPEG 缩略图并回退显示');
+              return;
+            }
+          }
+        }
+      } catch (thumbErr) {
+         console.warn('无法提取嵌入缩略图，忽略:', thumbErr);
+       }
+       console.warn('所有候选与缩略图回退均已尝试，停止错误回退');
+       onError?.('图片加载失败');
+       setActiveSrc('');
 
       const errorMessage = '图片加载失败，所有回退方式均不可用';
       console.error(errorMessage);
-      // 静默策略：已有列表场景下尝试跳过到下一张；仅单张时保持静默
-      if (imageList.length > 1 && currentImageIndex >= 0) {
-        setTimeout(() => switchImage('next'), 0);
-      }
+      // 避免在非 Tauri 环境或连续失败场景下形成无限切换循环，不再自动跳到下一张
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('初始加载回退处理失败:', msg);
-      if (imageList.length > 1 && currentImageIndex >= 0) {
-        setTimeout(() => switchImage('next'), 0);
-      }
+      // 同上：不自动跳下一张，避免循环
     }
-  }, [buildCandidateUrls, currentFilePath, filePath, activeSrc, imageList, currentImageIndex, switchImage, fileBlob]);
+  }, [buildCandidateUrls, currentFilePath, filePath, activeSrc, imageList, currentImageIndex, switchImage, fileBlob, detectPdf, src, pdfCurrentPage, renderPdfPage, isPdfFileMode]);
 
   // 缩放图片 - 以图片中心为基准点，确保图片中心相对于屏幕的绝对坐标不变
   const zoomImage = useCallback((zoomFactor: number) => {
@@ -731,7 +1150,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       e.preventDefault();
     }
 
-    // 基于滚轮幅度的指数缩放，提升缩小时的平滑度
+    // 基于滚轮幅度的指数缩放，提升缩小时段的平滑度
     const base = 1.0015;
     const clamped = Math.max(-60, Math.min(60, -e.deltaY));
     const zoomFactor = Math.pow(base, clamped);
@@ -874,6 +1293,26 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       } else if (e.code === 'ArrowRight') {
         switchImage('next');
         e.preventDefault();
+      } else if (e.code === 'ArrowUp') {
+        if (isPdfFileMode && pdfDocRef.current) {
+          void switchPdfPage('prev');
+          e.preventDefault();
+        }
+      } else if (e.code === 'ArrowDown') {
+        if (isPdfFileMode && pdfDocRef.current) {
+          void switchPdfPage('next');
+          e.preventDefault();
+        }
+      } else if (e.code === 'PageUp') {
+        if (isPdfFileMode && pdfDocRef.current) {
+          void switchPdfPage('prev');
+          e.preventDefault();
+        }
+      } else if (e.code === 'PageDown') {
+        if (isPdfFileMode && pdfDocRef.current) {
+          void switchPdfPage('next');
+          e.preventDefault();
+        }
       }
     };
 
@@ -893,7 +1332,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       document.removeEventListener('keydown', handleKeyDown, true);
       document.removeEventListener('keyup', handleKeyUp, true);
     };
-  }, [switchImage]);
+  }, [switchImage, isPdfFileMode, switchPdfPage]);
 
   // 全局拖拽事件绑定（确保拖拽不受容器边界影响）
   useEffect(() => {
@@ -931,8 +1370,12 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     if (externalVolumeUp) externalVolumeUp.current = () => {};
     if (externalVolumeDown) externalVolumeDown.current = () => {};
     if (externalMute) externalMute.current = () => {};
-    if (externalSeekForward) externalSeekForward.current = () => switchImage('next');
-    if (externalSeekBackward) externalSeekBackward.current = () => switchImage('prev');
+    if (externalSeekForward) externalSeekForward.current = () => {
+      switchImage('next');
+    };
+    if (externalSeekBackward) externalSeekBackward.current = () => {
+      switchImage('prev');
+    };
     if (externalSeekTo) externalSeekTo.current = () => {};
   }, [switchImage]);
 
@@ -1015,27 +1458,34 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       onMouseLeave={handleMouseUp}
       onWheel={handleWheel}
     >
-      <img
-        ref={imageRef}
-        src={activeSrc}
-        alt={fileName || '图片'}
-        style={getImageStyle()}
-        onLoad={handleImageLoad}
-        onError={handleInitialImageError}
-        className="select-none"
-        draggable={false}
-      />
+
+      {activeSrc ? (
+        <img
+          ref={imageRef}
+          src={activeSrc}
+          alt={fileName || '图片'}
+          style={getImageStyle()}
+          onLoad={handleImageLoad}
+          onError={handleInitialImageError}
+          className="select-none"
+          draggable={false}
+        />
+      ) : null}
 
       {/* 状态/尺寸/索引文本已移除 */}
 
       {/* 边缘点击区域指示（可点击切换） */}
       <div
         className="absolute inset-y-0 left-0 w-[10%] opacity-0 hover:opacity-20 bg-blue-500/30 transition-opacity z-5 pointer-events-auto"
-        onClick={() => switchImage('prev')}
+        onClick={() => {
+          switchImage('prev');
+        }}
       />
       <div
         className="absolute inset-y-0 right-0 w-[10%] opacity-0 hover:opacity-20 bg-blue-500/30 transition-opacity z-5 pointer-events-auto"
-        onClick={() => switchImage('next')}
+        onClick={() => {
+          switchImage('next');
+        }}
       />
 
       {/* 操作提示：仅在鼠标停留底部20%区域时显示 */}

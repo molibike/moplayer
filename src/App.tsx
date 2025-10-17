@@ -421,7 +421,7 @@ function App() {
 
   const isImageFile = (file: File) => {
     return file.type.startsWith('image/') || 
-           /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(file.name);
+           /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico|tif|tiff|heic|heif|wmf|exif|raw|cr2|nef|arw|dng|rw2|orf|raf|sr2)$/i.test(file.name);
   };
 
   // 获取当前媒体类型
@@ -552,6 +552,11 @@ function App() {
     const map: Record<string, string> = {
       // 图片
       'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'gif': 'image/gif', 'bmp': 'image/bmp', 'webp': 'image/webp', 'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+      'tif': 'image/tiff', 'tiff': 'image/tiff', 'heic': 'image/heic', 'heif': 'image/heif',
+      // 相机RAW（尽量给出具体类型，便于识别）
+      'cr2': 'image/x-canon-cr2', 'nef': 'image/x-nikon-nef', 'arw': 'image/x-sony-arw', 'dng': 'image/x-adobe-dng', 'rw2': 'image/x-panasonic-rw2', 'orf': 'image/x-olympus-orf', 'raf': 'image/x-fuji-raf', 'sr2': 'image/x-sony-sr2',
+      // 其他
+      'exif': 'image/jpeg', 'raw': 'application/octet-stream', 'wmf': 'application/x-msmetafile', 'pdf': 'application/pdf',
       // 音频
       'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg', 'aac': 'audio/aac', 'flac': 'audio/flac', 'm4a': 'audio/mp4', 'wma': 'audio/x-ms-wma',
       // 视频
@@ -568,7 +573,7 @@ function App() {
         filters: [
           {
             name: '媒体文件',
-            extensions: ['mp4','webm','ogv','mkv','mov','wmv','flv','m4v','mp3','wav','ogg','aac','flac','m4a','wma','jpg','jpeg','png','gif','bmp','webp','svg','ico']
+            extensions: ['mp4','webm','ogv','mkv','mov','wmv','flv','m4v','mp3','wav','ogg','aac','flac','m4a','wma','jpg','jpeg','png','gif','bmp','webp','svg','ico','tif','tiff','heic','heif','pdf','wmf','exif','raw','cr2','nef','arw','dng','rw2','orf','raf','sr2']
           }
         ]
       });
@@ -588,7 +593,8 @@ function App() {
         // 回退到浏览器 input（极端情况下）
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = 'video/*,audio/*,image/*';
+        // 包含 PDF 和常见图片类型
+        input.accept = 'video/*,audio/*,image/*,application/pdf,.pdf';
         input.onchange = (e) => {
           const file = (e.target as HTMLInputElement).files?.[0];
           if (file) {
@@ -601,7 +607,8 @@ function App() {
       console.error('打开文件失败，使用回退输入框:', error);
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = 'video/*,audio/*,image/*';
+      // 包含 PDF 和常见图片类型
+      input.accept = 'video/*,audio/*,image/*,application/pdf,.pdf';
       input.onchange = (e) => {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (file) {
@@ -802,8 +809,11 @@ function App() {
         
         const files = Array.from(e.dataTransfer.files);
         const mediaFiles = files.filter(file => 
-          file.type.startsWith('video/') || file.type.startsWith('audio/') || file.type.startsWith('image/') ||
-          /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v|mp3|wav|ogg|flac|aac|m4a|wma|jpg|jpeg|png|gif|bmp|webp|svg|ico)$/i.test(file.name)
+          file.type.startsWith('video/') ||
+          file.type.startsWith('audio/') ||
+          file.type.startsWith('image/') ||
+          file.type === 'application/pdf' ||
+          /\.(mp4|avi|mkv|mov|wmv|flv|webm|m4v|mp3|wav|ogg|flac|aac|m4a|wma|jpg|jpeg|png|gif|bmp|webp|svg|ico|pdf)$/i.test(file.name)
         );
         
         if (mediaFiles.length > 0) {
