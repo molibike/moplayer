@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -421,10 +420,14 @@ function App() {
 
   const isImageFile = (file: File) => {
     return file.type.startsWith('image/') || 
-           /\.(jpg|jpeg|png|gif|bmp|webp|svg|ico|tif|tiff|heic|heif|wmf|exif|raw|cr2|nef|arw|dng|rw2|orf|raf|sr2)$/i.test(file.name);
+           /(jpg|jpeg|png|gif|bmp|webp|svg|ico|tif|tiff|heic|heif|wmf|exif|raw|cr2|nef|arw|dng|rw2|orf|raf|sr2)$/i.test(file.name);
   };
 
-  // 获取当前媒体类型
+  // 新增：PDF 文件检测（用于菜单栏隐藏策略）
+  const isPdfFile = (file: File) => {
+    return file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  };
+
   const getCurrentMediaType = () => {
     if (currentPlaylistIndex < 0 || currentPlaylistIndex >= playlist.length) {
       return 'unknown';
@@ -734,29 +737,7 @@ function App() {
   });
 
   // 监听来自后端的打开文件事件（用于右键“使用 MoPlayer 打开”或文件关联双击）
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    (async () => {
-      try {
-        unlisten = await listen<string>('open-file', async (event) => {
-          try {
-            const path = event.payload;
-            const bytes = await readFile(path);
-            const name = path.replace(/\\/g, '/').split('/').pop() || '未命名文件';
-            const mime = guessMimeType(path);
-            const file = new File([bytes], name, { type: mime });
-            (file as any).path = path;
-            await handleFileSelect(file);
-          } catch (e) {
-            console.error('处理 open-file 事件失败:', e);
-          }
-        });
-      } catch (e) {
-        console.warn('监听 open-file 事件失败:', e);
-      }
-    })();
-    return () => { if (unlisten) unlisten(); };
-  }, []);
+  // ... existing code ...
 
   // 应用启动后主动拉取启动文件路径，确保“打开方式/右键菜单”即开即播
   useEffect(() => {
@@ -832,7 +813,13 @@ function App() {
         onOpenFile={handleOpenFile}
         onExit={handleExit}
         isPlaying={videoSrc ? playerState.isPlaying : false}
-        autoHide={(getCurrentMediaType() === 'image') || (getCurrentMediaType() === 'video' && playerState.isPlaying)}
+        autoHide={(getCurrentMediaType() === 'image') || (getCurrentMediaType() === 'video' && playerState.isPlaying) || (() => {
+          const item = playlist[currentPlaylistIndex];
+          if (!item) return false;
+          const f = item.file;
+          const p = item?.originalPath || getFilePath(f) || '';
+          return (typeof p === 'string' && /\.pdf$/i.test(p)) || isPdfFile(f);
+        })()}
       />
 
       {/* 拖拽覆盖层 */}

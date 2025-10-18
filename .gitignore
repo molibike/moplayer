@@ -42,6 +42,10 @@ gen/
 Thumbs.db
 *.log
 
+# OS/Installer binaries
+*.exe
+*.msi
+
 # Temporary files
 *.tmp
 *.temp

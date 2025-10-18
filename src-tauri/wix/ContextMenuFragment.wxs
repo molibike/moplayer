@@ -1,9 +1,9 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <!-- 涓烘墍鏈夋枃浠舵坊鍔犲彸閿彍鍗曪細浣跨敤 MoPlayer 鎵撳紑 -->
+  <!-- 娑撶儤澧嶉張澶嬫瀮娴犺埖鍧婇崝鐘插礁闁款喛褰嶉崡鏇窗娴ｈ法鏁?MoPlayer 閹垫挸绱?-->
   <Fragment>
     <DirectoryRef Id="TARGETDIR">
-      <!-- 涓哄父瑙侀煶瑙嗛绫诲瀷娣诲姞鍙抽敭鑿滃崟锛歄pen with MoPlayer -->
+      <!-- 娑撳搫鐖剁憴渚€鐓剁憴鍡涱暥缁鐎峰ǎ璇插閸欐娊鏁懣婊冨礋閿涙瓌pen with MoPlayer -->
       <Component Id="MoPlayerContextMenuComponent" Guid="*">
         <!-- mp4 -->
         <RegistryKey Root="HKCR" Key="SystemFileAssociations\.mp4\shell\OpenWithMoPlayer">
@@ -100,7 +100,150 @@
         <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wma\shell\OpenWithMoPlayer\command">
           <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
         </RegistryKey>
+
+        <!-- wmv -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wmv\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="用MoPlayer打开" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wmv\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- flv -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.flv\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="用MoPlayer打开" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.flv\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- m4v -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.m4v\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="用MoPlayer打开" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.m4v\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- ogv -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.ogv\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="用MoPlayer打开" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.ogv\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- 3gp锛堜笌 bundle.fileAssociations 淇濇寔涓€鑷达級 -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.3gp\shell\OpenWithMoPlayer">
+          <RegistryValue Type="string" Value="用MoPlayer打开" />
+        </RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.3gp\shell\OpenWithMoPlayer\command">
+          <RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" />
+        </RegistryKey>
+
+        <!-- Add right-click main menu for images, RAW and PDF -->
+        <!-- common images -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.jpg\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.jpg\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.jpeg\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.jpeg\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.png\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.png\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.gif\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.gif\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.bmp\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.bmp\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.webp\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.webp\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.ico\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.ico\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.svg\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.svg\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.tif\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.tif\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.tiff\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.tiff\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.heic\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.heic\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.heif\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.heif\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wmf\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.wmf\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <!-- camera RAW formats -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.cr2\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.cr2\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.nef\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.nef\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.arw\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.arw\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.dng\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.dng\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.rw2\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.rw2\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.orf\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.orf\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.raf\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.raf\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.sr2\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.sr2\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <!-- pdf -->
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.pdf\shell\OpenWithMoPlayer"><RegistryValue Type="string" Value="用MoPlayer打开" /></RegistryKey>
+        <RegistryKey Root="HKCR" Key="SystemFileAssociations\.pdf\shell\OpenWithMoPlayer\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+        <!-- ensure open-with launches moplayer -->
+        <RegistryKey Root="HKCR" Key="Applications\moplayer.exe\shell\open\command"><RegistryValue Type="string" Value="&quot;[INSTALLDIR]moplayer.exe&quot; &quot;%1&quot;" /></RegistryKey>
+
+        <!-- OpenWithList entries for video formats -->
+        <RegistryKey Root="HKCR" Key=".mp4\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".avi\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".mkv\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".mov\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".webm\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".wmv\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".flv\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".m4v\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".ogv\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".3gp\OpenWithList\moplayer.exe" />
+
+        <!-- OpenWithList entries for audio formats -->
+        <RegistryKey Root="HKCR" Key=".mp3\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".wav\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".flac\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".aac\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".ogg\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".m4a\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".wma\OpenWithList\moplayer.exe" />
+
+        <!-- OpenWithList entries for image formats -->
+        <RegistryKey Root="HKCR" Key=".jpg\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".jpeg\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".png\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".gif\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".bmp\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".webp\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".svg\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".ico\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".tif\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".tiff\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".heic\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".heif\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".wmf\OpenWithList\moplayer.exe" />
+        <!-- camera RAW formats listed in fileAssociations -->
+        <RegistryKey Root="HKCR" Key=".cr2\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".nef\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".arw\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".dng\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".rw2\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".orf\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".raf\OpenWithList\moplayer.exe" />
+        <RegistryKey Root="HKCR" Key=".sr2\OpenWithList\moplayer.exe" />
+
+        <!-- OpenWithList entry for PDF -->
+        <RegistryKey Root="HKCR" Key=".pdf\OpenWithList\moplayer.exe" />
       </Component>
     </DirectoryRef>
   </Fragment>
 </Wix>
+
+
+
+
