@@ -1116,15 +1116,18 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       // 优先使用 exifr 提取嵌入的缩略图；失败时再手动扫描 JPEG
       try {
         const bytes = await readFile(inferredPath);
-        let thumbBuffer: ArrayBuffer | null = null;
+        let thumbData: Uint8Array | Buffer | undefined;
         try {
-          thumbBuffer = await (exifr as any).thumbnailBuffer(bytes.buffer);
+          thumbData = await (exifr as any).thumbnail(bytes);
         } catch (exErr) {
           console.warn('exifr 提取缩略图失败，尝试手动扫描 JPEG:', exErr);
         }
 
-        if (thumbBuffer) {
-          const blob = new Blob([thumbBuffer], { type: 'image/jpeg' });
+        if (thumbData) {
+          const v: Uint8Array = thumbData instanceof Uint8Array ? thumbData : new Uint8Array(thumbData as any);
+          const ab = new ArrayBuffer(v.byteLength);
+          new Uint8Array(ab).set(v);
+          const blob = new Blob([ab], { type: 'image/jpeg' });
           const url = URL.createObjectURL(blob);
           if (url && url !== activeSrc) {
             setActiveSrc(url);
@@ -1557,6 +1560,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       {/* 边缘点击区域指示（可点击切换） */}
       <div
         className="absolute inset-y-0 left-0 w-[10%] opacity-0 hover:opacity-20 bg-blue-500/30 transition-opacity z-5 pointer-events-auto"
+        data-prevent-drag=""
         onClick={(e) => {
           e.stopPropagation();
           switchImage('prev');
@@ -1564,6 +1568,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       />
       <div
         className="absolute inset-y-0 right-0 w-[10%] opacity-0 hover:opacity-20 bg-blue-500/30 transition-opacity z-5 pointer-events-auto"
+        data-prevent-drag=""
         onClick={(e) => {
           e.stopPropagation();
           switchImage('next');

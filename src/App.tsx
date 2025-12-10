@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile, readDir } from '@tauri-apps/plugin-fs';
 
@@ -738,6 +739,52 @@ function App() {
 
   // 监听来自后端的打开文件事件（用于右键“使用 MoPlayer 打开”或文件关联双击）
   // ... existing code ...
+
+  // 监听系统级文件拖拽到窗口
+  useEffect(() => {
+    let unsubs: Array<() => void> = [];
+    (async () => {
+      const handler = async (event: any) => {
+        try {
+          const payload = event?.payload;
+          const paths: string[] = Array.isArray(payload)
+            ? payload
+            : (payload && Array.isArray(payload.paths) ? payload.paths : []);
+          if (!paths || paths.length === 0) return;
+          const path = paths[0];
+          const bytes = await readFile(path);
+          const mime = guessMimeType(path);
+          const name = path.replace(/\\/g, '/').split('/').pop() || '未命名文件';
+          const file = new File([bytes], name, { type: mime });
+          (file as any).path = path;
+          await handleFileSelect(file);
+        } catch (e) {
+          console.warn('处理文件拖拽事件失败:', e);
+        }
+      };
+      try {
+        const u1 = await listen('tauri://file-drop', handler);
+        unsubs.push(u1);
+      } catch {}
+      try {
+        const u2 = await listen('tauri://drag-drop', handler);
+        unsubs.push(u2);
+      } catch {}
+      try {
+        const u3 = await listen('core://file-drop', handler);
+        unsubs.push(u3);
+      } catch {}
+      try {
+        const u4 = await listen('core://drag-drop', handler);
+        unsubs.push(u4);
+      } catch {}
+    })();
+    return () => {
+      for (const u of unsubs) {
+        try { u(); } catch {}
+      }
+    };
+  }, []);
 
   // 应用启动后主动拉取启动文件路径，确保“打开方式/右键菜单”即开即播
   useEffect(() => {

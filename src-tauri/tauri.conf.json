@@ -174,66 +174,6 @@
         "mimeType": "audio/mp4"
       },
       {
-        "ext": ["jpg", "jpeg"],
-        "description": "JPEG 图像文件",
-        "mimeType": "image/jpeg"
-      },
-      {
-        "ext": ["png"],
-        "description": "PNG 图像文件",
-        "mimeType": "image/png"
-      },
-      {
-        "ext": ["gif"],
-        "description": "GIF 图像文件",
-        "mimeType": "image/gif"
-      },
-      {
-        "ext": ["bmp"],
-        "description": "BMP 图像文件",
-        "mimeType": "image/bmp"
-      },
-      {
-        "ext": ["webp"],
-        "description": "WebP 图像文件",
-        "mimeType": "image/webp"
-      },
-      {
-        "ext": ["svg"],
-        "description": "SVG 图像文件",
-        "mimeType": "image/svg+xml"
-      },
-      {
-        "ext": ["ico"],
-        "description": "ICO 图像文件",
-        "mimeType": "image/x-icon"
-      },
-      {
-        "ext": ["tif", "tiff"],
-        "description": "TIFF 图像文件",
-        "mimeType": "image/tiff"
-      },
-      {
-        "ext": ["heic"],
-        "description": "HEIC 图像文件",
-        "mimeType": "image/heic"
-      },
-      {
-        "ext": ["heif"],
-        "description": "HEIF 图像文件",
-        "mimeType": "image/heif"
-      },
-      {
-        "ext": ["cr2", "nef", "arw", "dng", "rw2", "orf", "raf", "sr2"],
-        "description": "相机 RAW 图像文件",
-        "mimeType": "application/octet-stream"
-      },
-      {
-        "ext": ["wmf"],
-        "description": "WMF 图像文件",
-        "mimeType": "application/x-msmetafile"
-      },
-      {
         "ext": ["pdf"],
         "description": "PDF 文档",
         "mimeType": "application/pdf"
