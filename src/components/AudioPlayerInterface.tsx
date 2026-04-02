@@ -22,6 +22,7 @@ interface AudioMetadata {
   artist?: string;
   album?: string;
   coverImage?: string;
+  lyrics?: string;
 }
 
 interface AudioPlayerInterfaceProps {
@@ -65,7 +66,13 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     volume: 1,
     muted: false,
   });
-  const [metadata, setMetadata] = useState<AudioMetadata>({});
+  const [metadata, setMetadata] = useState<AudioMetadata>({
+    title: '',
+    artist: '',
+    album: '',
+    coverImage: undefined,
+    lyrics: '',
+  });
   const [isDragging] = useState(false);
   // 跟踪blob URL以便回收内存
   const coverBlobUrlRef = useRef<string | null>(null);
@@ -258,8 +265,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     try {
       const currentFileName = fileNameRef.current;
       const currentFileBlob = fileBlobRef.current;
-      // 优先解析音频内嵌封面与常用标签
       let coverImage: string | undefined;
+      let lyrics = '';
       let title = currentFileName.replace(/\.[^/.]+$/, '');
       let artist = '未知艺术家';
       let album = '未知专辑';
@@ -273,6 +280,9 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
           if (commonFromBlob.title) title = commonFromBlob.title;
           if (commonFromBlob.artist) artist = commonFromBlob.artist;
           if (commonFromBlob.album) album = commonFromBlob.album;
+          if (Array.isArray(commonFromBlob.lyrics) && commonFromBlob.lyrics.length > 0) {
+            lyrics = commonFromBlob.lyrics.join('\n').trim();
+          }
 
           if (commonFromBlob.picture && commonFromBlob.picture.length > 0) {
             const pic = commonFromBlob.picture[0];
@@ -292,7 +302,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             title: title || '', 
             artist: artist || '', 
             album: album || '', 
-            coverImage 
+            coverImage,
+            lyrics 
           });
           return; // 已解析完成，提前返回
         } catch (e) {
@@ -307,12 +318,13 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
           const metadata = await mm.parseBlob(blob);
           const common = metadata.common || {} as any;
 
-          // 标题/艺术家/专辑优先用标签
           if (common.title) title = common.title;
           if (common.artist) artist = common.artist;
           if (common.album) album = common.album;
+          if (Array.isArray(common.lyrics) && common.lyrics.length > 0) {
+            lyrics = common.lyrics.join('\n').trim();
+          }
 
-          // 提取封面图片
           if (common.picture && common.picture.length > 0) {
             const pic = common.picture[0];
 
@@ -331,14 +343,16 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             title: title || '', 
             artist: artist || '', 
             album: album || '', 
-            coverImage 
+            coverImage,
+            lyrics 
           });
         } catch (e) {
           setMetadata({ 
             title: title || '', 
             artist: artist || '', 
             album: album || '', 
-            coverImage 
+            coverImage,
+            lyrics 
           });
         }
       } else {
@@ -346,7 +360,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
           title: title || '', 
           artist: artist || '', 
           album: album || '', 
-          coverImage 
+          coverImage,
+          lyrics 
         });
       }
     } catch (error) {
@@ -355,6 +370,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
         artist: '未知艺术家',
         album: '未知专辑',
         coverImage: undefined,
+        lyrics: '',
       });
     }
   };
@@ -489,6 +505,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             currentTime={playerState.currentTime}
             duration={playerState.duration}
             onSeek={handleSeek}
+            isPlaying={playerState.isPlaying}
           />
         </div>
         

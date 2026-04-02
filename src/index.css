@@ -191,6 +191,30 @@ input[type="range"]::-moz-range-thumb {
   animation: spin 6s linear infinite;
 }
 
+/* 歌词滚动动画 */
+@keyframes lyrics-scroll {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-50%);
+  }
+}
+
+.lyrics-scroll-track {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  animation: lyrics-scroll 20s linear infinite;
+  will-change: transform;
+}
+
+.lyrics-scroll-content {
+  display: flex;
+  flex-direction: column;
+}
+
 /* 文件拖拽区域动画 */
 .drop-zone {
   transition: all 0.3s ease;

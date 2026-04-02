@@ -29,8 +29,8 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     try {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const analyser = ctx.createAnalyser();
-      // 使用较小的FFT以降低CPU开销（128 = 64个频率bins）
-      analyser.fftSize = 128;
+      // 使用较小但足够的FFT以支持最多128条音波柱（256 = 128个频率bins）
+      analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.6;
 
       const source = ctx.createMediaElementSource(audioElement);
@@ -78,18 +78,19 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
     const dataArray = dataArrayRef.current;
 
     // 条形参数
-    const barSpacing = 8;
-    const maxBarCount = Math.floor(canvas.width / 20);
-    const barCount = Math.max(1, Math.min(maxBarCount, 16));
+    const barSpacing = 4;
+    const maxBarCountByWidth = Math.floor(canvas.width / 10);
+    const availableBinCount = dataArray?.length ?? 128;
+    const barCount = Math.max(32, Math.min(maxBarCountByWidth, availableBinCount, 128));
     const totalSpacing = (barCount - 1) * barSpacing;
-    const barWidth = Math.max(4, (canvas.width - totalSpacing) / barCount);
+    const barWidth = Math.max(2, (canvas.width - totalSpacing) / barCount);
 
     ctx.fillStyle = 'hsl(200, 70%, 50%)';
 
     if (analyser && dataArray) {
       // 使用真实音频频率数据
       analyser.getByteFrequencyData(dataArray as any);
-      const binCount = dataArray.length; // 64 bins (fftSize/2)
+      const binCount = dataArray.length; // 128 bins (fftSize/2)
       const binsPerBar = Math.max(1, Math.floor(binCount / barCount));
 
       for (let i = 0; i < barCount; i++) {

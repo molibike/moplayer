@@ -6,6 +6,7 @@ interface AudioMetadata {
   album?: string;
   duration?: number;
   currentTime?: number;
+  lyrics?: string;
 }
 
 interface AudioInfoProps {
@@ -14,6 +15,7 @@ interface AudioInfoProps {
   currentTime: number;
   duration: number;
   onSeek?: (time: number) => void;
+  isPlaying: boolean;
 }
 
 const AudioInfo: React.FC<AudioInfoProps> = ({ 
@@ -21,11 +23,14 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   metadata, 
   currentTime, 
   duration, 
-  onSeek
+  onSeek,
+  isPlaying
 }) => {
   const [displayTitle, setDisplayTitle] = useState('');
   const [displayArtist, setDisplayArtist] = useState('');
   const [displayAlbum, setDisplayAlbum] = useState('');
+  const lyrics = metadata?.lyrics?.trim() || '';
+  const lyricsLines = lyrics ? lyrics.split(/\r?\n/).map(line => line.trim()).filter(Boolean) : [];
 
   // 格式化时间显示
   const formatTime = (time: number): string => {
@@ -82,7 +87,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   return (
     <div className="flex flex-col h-full p-6 bg-gradient-to-br from-gray-900 to-gray-800 text-white">
       {/* 音频信息区域 */}
-      <div className="flex-1 flex flex-col justify-center space-y-6">
+      <div className="flex-1 flex flex-col justify-center space-y-4">
         {/* 歌曲标题 */}
         <div className="text-center">
           <h1 className="font-bold text-white mb-2 leading-tight" style={{ fontSize: 'clamp(1.5rem, 4vw, 3rem)' }}>
@@ -107,7 +112,37 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
           </p>
         </div>
 
-
+        {lyricsLines.length > 0 && (
+          <div className="relative overflow-hidden rounded-xl border border-gray-700 bg-black/20" style={{ height: 'clamp(110px, 18vh, 180px)' }}>
+            <div
+              className="lyrics-scroll-track"
+              style={{ animationPlayState: isPlaying ? 'running' : 'paused' }}
+            >
+              <div className="lyrics-scroll-content">
+                {lyricsLines.map((line, index) => (
+                  <p
+                    key={`lyrics-top-${index}`}
+                    className="text-center text-gray-200"
+                    style={{ fontSize: 'clamp(0.875rem, 1.8vw, 1rem)', lineHeight: 1.8, marginBottom: '0.35rem' }}
+                  >
+                    {line}
+                  </p>
+                ))}
+              </div>
+              <div className="lyrics-scroll-content" aria-hidden="true">
+                {lyricsLines.map((line, index) => (
+                  <p
+                    key={`lyrics-bottom-${index}`}
+                    className="text-center text-gray-200"
+                    style={{ fontSize: 'clamp(0.875rem, 1.8vw, 1rem)', lineHeight: 1.8, marginBottom: '0.35rem' }}
+                  >
+                    {line}
+                  </p>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 时间信息 */}
         <div className="space-y-3">
