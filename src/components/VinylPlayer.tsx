@@ -78,12 +78,12 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
   useEffect(() => {
     if (isPlaying) {
       rotationTimerRef.current = window.setInterval(() => {
-        // 6度/100ms = 60度/秒 = 6秒一圈（与原CSS动画一致）
-        angleRef.current = (angleRef.current + 6) % 360;
+        // 4.8度/125ms = 38.4度/秒 = 7.5秒一圈（降低20%速度）
+        angleRef.current = (angleRef.current + 4.8) % 360;
         if (diskRef.current) {
           diskRef.current.style.transform = `rotate(${angleRef.current}deg)`;
         }
-      }, 100);
+      }, 125);
     } else {
       if (rotationTimerRef.current !== null) {
         window.clearInterval(rotationTimerRef.current);
@@ -134,63 +134,84 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
           </div>
         </div>
         
-        {/* 播放手柄：两节连接杆设计，从按钮连接点连接到唱片边缘 */}
-        {/* 第一段连接杆：从按钮几何中心到关节 */}
         <div 
-          className="bg-gray-600"
+          className="rounded-full"
           style={{
             position: 'fixed',
             top: `${geom.seg1.y}px`,
             left: `${geom.seg1.x}px`,
-            width: '8px',
+            width: '10px',
             height: `${geom.seg1.len}px`,
             transformOrigin: '50% 0%',
             transform: `translateX(-50%) rotate(${geom.angleDeg - 90}deg)`,
-            transition: 'transform 0.2s ease-out',
-            borderRadius: '4px 4px 2px 2px'
+            background: 'linear-gradient(90deg, #5a5a6a 0%, #8a8a9a 20%, #c0c0d0 50%, #8a8a9a 80%, #5a5a6a 100%)',
+            boxShadow: '2px 0 6px rgba(0,0,0,0.5), inset 0 0 2px rgba(255,255,255,0.3)',
+            border: '1px solid #4a4a5a'
           }}
         />
         
-        {/* 连接关节：两段连接杆的连接点，实时连接 */}
+        {/* 连接关节 - 金属球形关节 */}
         <div 
-          className="bg-gray-600 border-2 border-gray-500 rounded-full"
+          className="rounded-full"
           style={{
             position: 'fixed',
             top: `${geom.joint.y}px`,
             left: `${geom.joint.x}px`,
-            width: '16px',
-            height: '16px',
+            width: '18px',
+            height: '18px',
             transform: 'translate(-50%, -50%)',
-            zIndex: 10
+            zIndex: 10,
+            background: 'radial-gradient(circle at 30% 30%, #d0d0e0 0%, #8a8a9a 40%, #4a4a5a 100%)',
+            boxShadow: '0 3px 6px rgba(0,0,0,0.4), inset 0 1px 2px rgba(255,255,255,0.4)',
+            border: '1px solid #5a5a6a'
           }}
         />
         
-        {/* 第二段连接杆：从关节到唱针位置（唱片半径的40%处） */}
+        {/* 第二段连接杆 - 金属短杆 */}
         <div 
-          className="bg-gray-700"
+          className="rounded-full"
           style={{
             position: 'fixed',
             top: `${geom.seg2.y}px`,
             left: `${geom.seg2.x}px`,
-            width: '6px',
+            width: '8px',
             height: `${geom.seg2.len}px`,
             transformOrigin: '50% 0%',
             transform: `translateX(-50%) rotate(0deg)`,
-            transition: 'transform 0.2s ease-out',
-            borderRadius: '3px 3px 1px 1px'
+            background: 'linear-gradient(90deg, #4a4a5a 0%, #7a7a8a 30%, #a0a0b0 50%, #7a7a8a 70%, #4a4a5a 100%)',
+            boxShadow: '2px 0 4px rgba(0,0,0,0.4), inset 0 0 2px rgba(255,255,255,0.2)',
+            border: '1px solid #3a3a4a'
           }}
         />
 
-        {/* 唱针：位于唱片半径的40%处 */}
+        {/* 唱针头部 - 金属唱头壳 */}
         <div
-          className="bg-gray-300 rounded-full"
+          className="rounded-lg"
           style={{
             position: 'fixed',
-            top: `${geom.stylus.y}px`,
+            top: `${geom.stylus.y - 8}px`,
             left: `${geom.stylus.x}px`,
-            width: '12px',
-            height: '12px',
-            transform: 'translate(-50%, -50%)'
+            width: '16px',
+            height: '24px',
+            transform: 'translate(-50%, 0)',
+            background: 'linear-gradient(145deg, #6a6a7a 0%, #9a9aaa 50%, #5a5a6a 100%)',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.5), inset 0 1px 2px rgba(255,255,255,0.3)',
+            border: '1px solid #4a4a5a'
+          }}
+        />
+
+        {/* 唱针尖 */}
+        <div
+          className="rounded-full"
+          style={{
+            position: 'fixed',
+            top: `${geom.stylus.y + 12}px`,
+            left: `${geom.stylus.x}px`,
+            width: '6px',
+            height: '6px',
+            transform: 'translate(-50%, -50%)',
+            background: 'radial-gradient(circle at 30% 30%, #f0f0f0 0%, #a0a0a0 100%)',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.5)'
           }}
         />
         
