@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
+import type { LyricLine } from '../utils/lyrics';
 
 interface AudioMetadata {
   title?: string;
@@ -7,46 +8,76 @@ interface AudioMetadata {
   duration?: number;
   currentTime?: number;
   lyrics?: string;
+  lyricsLines?: LyricLine[];
 }
 
 interface AudioInfoProps {
   fileName: string;
   metadata?: AudioMetadata;
   currentTime: number;
-  duration: number;
-  onSeek?: (time: number) => void;
-  isPlaying: boolean;
+  onSearchLyrics?: () => void;
+  isSearchingLyrics?: boolean;
 }
 
 const AudioInfo: React.FC<AudioInfoProps> = ({ 
   fileName, 
   metadata, 
-  currentTime, 
-  duration, 
-  onSeek,
-  isPlaying
+  currentTime,
+  onSearchLyrics,
+  isSearchingLyrics
 }) => {
   const [displayTitle, setDisplayTitle] = useState('');
   const [displayArtist, setDisplayArtist] = useState('');
   const [displayAlbum, setDisplayAlbum] = useState('');
-  const lyrics = metadata?.lyrics?.trim() || '';
-  const lyricsLines = lyrics ? lyrics.split(/\r?\n/).map(line => line.trim()).filter(Boolean) : [];
+  const contentScrollRef = useRef<HTMLDivElement>(null);
+  const currentLineRef = useRef<HTMLParagraphElement>(null);
 
-  // 格式化时间显示
-  const formatTime = (time: number): string => {
-    if (!isFinite(time) || isNaN(time)) return '0:00';
-    
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
+  // 获取歌词行（带时间戳）
+  const lyricsWithTime = useMemo(() => {
+    return metadata?.lyricsLines && metadata.lyricsLines.length > 0 
+      ? metadata.lyricsLines 
+      : [];
+  }, [metadata?.lyricsLines]);
+
+  // 计算当前应该高亮的歌词索引
+  const currentLyricIndex = useMemo(() => {
+    if (!lyricsWithTime.length) return -1;
+
+    const currentMs = currentTime * 1000;
+
+    // 找到当前时间对应的行
+    for (let i = lyricsWithTime.length - 1; i >= 0; i--) {
+      if (lyricsWithTime[i].time <= currentMs) {
+        return i;
+      }
+    }
+    return 0;
+  }, [lyricsWithTime, currentTime]);
+
+  // 当前句变化时，驱动整个信息区滚动
+  useEffect(() => {
+    if (currentLineRef.current && contentScrollRef.current) {
+      const container = contentScrollRef.current;
+      const line = currentLineRef.current;
+
+      const containerHeight = container.clientHeight;
+      const lineTop = line.offsetTop;
+      const lineHeight = line.clientHeight;
+
+      // 计算需要滚动的位置，使当前行落在更强聚焦的视觉中心
+      const focusAnchor = containerHeight * 0.42;
+      const scrollTarget = lineTop - focusAnchor + lineHeight / 2;
+
+      container.scrollTo({
+        top: Math.max(0, scrollTarget),
+        behavior: 'smooth'
+      });
+    }
+  }, [currentLyricIndex]);
 
   // 从文件名提取信息
   const extractInfoFromFileName = (fileName: string) => {
-    // 移除文件扩展名
     const nameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
-    
-    // 尝试解析常见的命名格式：艺术家 - 歌曲名
     const parts = nameWithoutExt.split(' - ');
     if (parts.length >= 2) {
       return {
@@ -54,8 +85,6 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
         title: parts.slice(1).join(' - ').trim()
       };
     }
-    
-    // 如果没有分隔符，整个文件名作为标题
     return {
       title: nameWithoutExt,
       artist: '未知艺术家'
@@ -84,101 +113,121 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
     }
   }, [fileName, metadata]);
 
+  // 点击歌词行跳转到对应时间
+  const handleLyricClick = (timeMs: number) => {
+    // 预留跳转接口
+    console.log('Seek to:', timeMs / 1000);
+  };
+
+  const headerCollapsed = currentLyricIndex > 0;
+
   return (
     <div className="flex flex-col h-full p-6 bg-gradient-to-br from-gray-900 to-gray-800 text-white">
-      {/* 音频信息区域 */}
-      <div className="flex-1 flex flex-col justify-center space-y-4">
-        {/* 歌曲标题 */}
-        <div className="text-center">
-          <h1 className="font-bold text-white mb-2 leading-tight" style={{ fontSize: 'clamp(1.5rem, 4vw, 3rem)' }}>
-            {displayTitle}
-          </h1>
-          <div className="bg-gradient-to-r from-blue-500 to-purple-500 mx-auto rounded-full" style={{ width: 'clamp(60px, 8vw, 96px)', height: '4px' }} />
-        </div>
-
-        {/* 艺术家信息 */}
-        <div className="text-center">
-          <p className="text-gray-300 mb-1" style={{ fontSize: 'clamp(1rem, 2.5vw, 1.25rem)' }}>艺术家</p>
-          <p className="font-semibold text-blue-400" style={{ fontSize: 'clamp(1.25rem, 3vw, 1.5rem)' }}>
-            {displayArtist}
-          </p>
-        </div>
-
-        {/* 专辑信息 */}
-        <div className="text-center">
-          <p className="text-gray-400 mb-1" style={{ fontSize: 'clamp(0.875rem, 2vw, 1.125rem)' }}>专辑</p>
-          <p className="text-gray-200" style={{ fontSize: 'clamp(1.125rem, 2.5vw, 1.25rem)' }}>
-            {displayAlbum}
-          </p>
-        </div>
-
-        {lyricsLines.length > 0 && (
-          <div className="relative overflow-hidden rounded-xl border border-gray-700 bg-black/20" style={{ height: 'clamp(110px, 18vh, 180px)' }}>
-            <div
-              className="lyrics-scroll-track"
-              style={{ animationPlayState: isPlaying ? 'running' : 'paused' }}
-            >
-              <div className="lyrics-scroll-content">
-                {lyricsLines.map((line, index) => (
-                  <p
-                    key={`lyrics-top-${index}`}
-                    className="text-center text-gray-200"
-                    style={{ fontSize: 'clamp(0.875rem, 1.8vw, 1rem)', lineHeight: 1.8, marginBottom: '0.35rem' }}
-                  >
-                    {line}
-                  </p>
-                ))}
-              </div>
-              <div className="lyrics-scroll-content" aria-hidden="true">
-                {lyricsLines.map((line, index) => (
-                  <p
-                    key={`lyrics-bottom-${index}`}
-                    className="text-center text-gray-200"
-                    style={{ fontSize: 'clamp(0.875rem, 1.8vw, 1rem)', lineHeight: 1.8, marginBottom: '0.35rem' }}
-                  >
-                    {line}
-                  </p>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 时间信息 */}
-        <div className="space-y-3">
-          {/* 进度条 */}
-          <div 
-            className="w-full bg-gray-700 rounded-full h-2 overflow-hidden cursor-pointer relative"
-            onClick={(e) => {
-              if (onSeek && duration > 0) {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const clickX = e.clientX - rect.left;
-                const percentage = clickX / rect.width;
-                const newTime = percentage * duration;
-                onSeek(Math.max(0, Math.min(duration, newTime)));
-              }
+      {/* 音频信息与歌词统一滚动区域 */}
+      <div ref={contentScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden">
+        <div className="flex flex-col items-center text-center" style={{ paddingTop: '0.25rem', paddingBottom: '3rem' }}>
+          {/* 歌曲标题 */}
+          <div
+            style={{
+              width: '100%',
             }}
           >
-            <div 
-              className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-300 ease-out"
-              style={{ 
-                width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' 
-              }}
-            />
+            <h1 className="font-bold text-white mb-2 leading-tight" style={{ fontSize: headerCollapsed ? 'clamp(1.2rem, 3vw, 2.1rem)' : 'clamp(1.5rem, 4vw, 3rem)' }}>
+              {displayTitle}
+            </h1>
           </div>
-          
-          {/* 时间显示 */}
-          <div className="flex justify-between text-gray-400" style={{ fontSize: 'clamp(0.75rem, 1.5vw, 0.875rem)' }}>
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(duration)}</span>
-          </div>
-        </div>
 
-        {/* 音频格式信息 */}
-        <div className="text-center pt-4 border-t border-gray-700">
-          <p className="text-gray-500" style={{ fontSize: 'clamp(0.75rem, 1.5vw, 0.875rem)' }}>
-            音频文件：{fileName.split('.').pop()?.toUpperCase() || 'UNKNOWN'}
-          </p>
+          {/* 艺术家信息 */}
+          <div
+            className="mt-3"
+            style={{
+              width: '100%',
+            }}
+          >
+            <p className="text-gray-300 mb-1" style={{ fontSize: headerCollapsed ? 'clamp(0.82rem, 1.8vw, 0.95rem)' : 'clamp(1rem, 2.5vw, 1.25rem)' }}>艺术家</p>
+            <p className="font-semibold text-blue-400" style={{ fontSize: headerCollapsed ? 'clamp(1rem, 2.2vw, 1.15rem)' : 'clamp(1.25rem, 3vw, 1.5rem)' }}>
+              {displayArtist}
+            </p>
+          </div>
+
+          {/* 专辑信息 */}
+          <div
+            className="mt-3"
+            style={{
+              width: '100%',
+            }}
+          >
+            <p className="text-gray-400 mb-1" style={{ fontSize: headerCollapsed ? 'clamp(0.78rem, 1.7vw, 0.88rem)' : 'clamp(0.875rem, 2vw, 1.125rem)' }}>专辑</p>
+            <p className="text-gray-200" style={{ fontSize: headerCollapsed ? 'clamp(0.92rem, 2vw, 1rem)' : 'clamp(1.125rem, 2.5vw, 1.25rem)' }}>
+              {displayAlbum}
+            </p>
+          </div>
+
+          {/* 歌词直接拼接在信息下方，同区滚动 */}
+          {lyricsWithTime.length > 0 ? (
+            <div className="w-full" style={{ maxWidth: '92%', marginTop: headerCollapsed ? '0.4rem' : '1.5rem', paddingBottom: '40vh' }}>
+              {lyricsWithTime.map((line, index) => {
+                const isCurrent = index === currentLyricIndex;
+                const isPast = index < currentLyricIndex;
+                // 简约：只保留基础透明度层次
+                const lineOpacity = isCurrent ? 1 : isPast ? 0.55 : 0.75;
+
+                return (
+                  <p
+                    key={`lyric-${index}`}
+                    ref={isCurrent ? currentLineRef : null}
+                    onClick={() => handleLyricClick(line.time)}
+                    className={`cursor-pointer transition-opacity duration-200 ${
+                      isCurrent
+                        ? 'text-white font-bold'
+                        : isPast
+                          ? 'text-gray-500'
+                          : 'text-gray-400'
+                    }`}
+                    style={{
+                      fontSize: 'clamp(0.98rem, 2.1vw, 1.15rem)',
+                      lineHeight: 1.8,
+                      marginTop: index === 0 ? '0' : '0.28rem',
+                      opacity: lineOpacity,
+                      filter: 'none'
+                    }}
+                  >
+                    {line.text}
+                  </p>
+                );
+              })}
+            </div>
+          ) : (
+            /* 无歌词时显示搜索按钮 */
+            <div className="w-full flex flex-col items-center" style={{ marginTop: '2rem' }}>
+              <p className="text-gray-500 mb-3" style={{ fontSize: 'clamp(0.9rem, 2vw, 1.1rem)' }}>
+                暂无歌词
+              </p>
+              <button
+                onClick={onSearchLyrics}
+                disabled={isSearchingLyrics}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 text-white rounded-lg transition-colors duration-200 flex items-center gap-2"
+                style={{ fontSize: 'clamp(0.85rem, 1.8vw, 1rem)' }}
+              >
+                {isSearchingLyrics ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    搜索中...
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    搜索歌词
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
