@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 
 interface AudioVisualizerProps {
   audioElement?: HTMLAudioElement | null;
@@ -12,153 +12,60 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   height = 120 
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number>();
+  // 使用setInterval定时器ID，避免requestAnimationFrame保持WebView2渲染循环
+  const timerRef = useRef<number | null>(null);
+  // Web Audio API 引用（用于获取真实音频频率数据）
+  const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const dataArrayRef = useRef<Uint8Array | null>(null);
-  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
-  const [canvasSize, setCanvasSize] = useState({ width: 1200, height: 200 });
+  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const dataArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
 
-  // 监听窗口大小变化，动态调整canvas尺寸
-  useEffect(() => {
-    const updateCanvasSize = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      
-      const container = canvas.parentElement;
-      if (!container) return;
-      
-      const rect = container.getBoundingClientRect();
-      // 音波区宽度 = 程序窗口总宽度 * 61%
-      const newWidth = Math.max(Math.floor(rect.width * 0.61), 800); // 最小宽度800px
-      const newHeight = Math.max(Math.floor(rect.height), height || 200);
-      
-      setCanvasSize({ width: newWidth, height: newHeight });
-    };
-
-    // 初始设置
-    setTimeout(updateCanvasSize, 100); // 延迟一点确保DOM完全渲染
-    
-    // 监听窗口大小变化
-    window.addEventListener('resize', updateCanvasSize);
-    
-    return () => {
-      window.removeEventListener('resize', updateCanvasSize);
-    };
-  }, [height]);
-
-  // 初始化音频分析器
+  // 初始化AudioContext和AnalyserNode - 仅在audioElement变化时创建
   useEffect(() => {
     if (!audioElement) return;
+    // 避免重复创建source（一个audio元素只能createMediaElementSource一次）
+    if (sourceRef.current) return;
 
-    const initAudioContext = async () => {
-      try {
-        // 创建音频上下文
-        const context = new (window.AudioContext || (window as any).webkitAudioContext)();
-        setAudioContext(context);
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = ctx.createAnalyser();
+      // 使用较小的FFT以降低CPU开销（128 = 64个频率bins）
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.6;
 
-        // 创建分析器节点
-        const analyser = context.createAnalyser();
-        analyser.fftSize = 256;
-        analyser.smoothingTimeConstant = 0.8;
-        
-        // 连接音频源
-        const source = context.createMediaElementSource(audioElement);
-        source.connect(analyser);
-        analyser.connect(context.destination);
-        
-        // 创建数据数组
-        const bufferLength = analyser.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-        
-        analyserRef.current = analyser;
-        dataArrayRef.current = dataArray;
-      } catch (error) {
-        console.error('音频上下文初始化失败:', error);
-      }
-    };
+      const source = ctx.createMediaElementSource(audioElement);
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
 
-    initAudioContext();
+      audioContextRef.current = ctx;
+      analyserRef.current = analyser;
+      sourceRef.current = source;
+      dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount) as Uint8Array<ArrayBuffer>;
+    } catch (error) {
+      // 初始化失败时静默处理，波形图将显示静态
+    }
 
     return () => {
-      if (audioContext) {
-        audioContext.close();
+      // 组件卸载时关闭AudioContext
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(() => {});
       }
+      audioContextRef.current = null;
+      analyserRef.current = null;
+      sourceRef.current = null;
+      dataArrayRef.current = null;
     };
   }, [audioElement]);
 
-  // 绘制音频可视化
-  const draw = () => {
-    const canvas = canvasRef.current;
-    const analyser = analyserRef.current;
-    const dataArray = dataArrayRef.current;
-    
-    if (!canvas || !analyser || !dataArray) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // 获取音频数据
-    if (dataArray) {
-      const tempArray = new Uint8Array(dataArray.length);
-      analyser.getByteFrequencyData(tempArray);
-      dataArray.set(tempArray);
+  // 恢复被暂停的AudioContext
+  useEffect(() => {
+    if (isPlaying && audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume().catch(() => {});
     }
+  }, [isPlaying]);
 
-    // 清空画布
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // 根据canvas宽度动态计算条形数量，确保铺满整个区域
-    const minBarWidth = 10; // 最小条形宽度设置为10像素
-    const barSpacing = 1; // 条形间距
-    const maxBarCount = Math.floor(canvas.width / (minBarWidth + barSpacing));
-    
-    // 确保条形完全填满整个区域，计算实际条宽度
-    const barCount = Math.max(1, maxBarCount);
-    const totalSpacing = (barCount - 1) * barSpacing;
-    const actualBarWidth = Math.max(minBarWidth, (canvas.width - totalSpacing) / barCount);
-
-    // 绘制音频条
-    for (let i = 0; i < barCount; i++) {
-      // 从频率数据中采样
-      const dataIndex = Math.floor((i / barCount) * dataArray.length);
-      // 确保音波条最低绘制高度为5像素
-      const barHeight = Math.max((dataArray[dataIndex] / 255) * canvas.height, 7);
-      
-      // 计算颜色（基于频率强度）
-      const intensity = dataArray[dataIndex] / 255;
-      const hue = 200 + intensity * 160; // 从蓝色到紫色
-      const saturation = 70 + intensity * 30;
-      const lightness = 40 + intensity * 40;
-      
-      // 绘制条形
-      const x = i * (actualBarWidth + barSpacing);
-      const y = canvas.height - barHeight;
-      
-      // 创建渐变
-      const gradient = ctx.createLinearGradient(0, y, 0, canvas.height);
-      gradient.addColorStop(0, `hsl(${hue}, ${saturation}%, ${lightness + 20}%)`);
-      gradient.addColorStop(1, `hsl(${hue}, ${saturation}%, ${lightness}%)`);
-      
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x, y, actualBarWidth, barHeight);
-      
-      // 添加发光效果
-      if (intensity > 0.3) {
-        ctx.shadowColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-        ctx.shadowBlur = 10;
-        ctx.fillRect(x, y, actualBarWidth, barHeight);
-        ctx.shadowBlur = 0;
-      }
-    }
-
-    // 继续动画
-    if (isPlaying) {
-      animationRef.current = requestAnimationFrame(draw);
-    }
-  };
-
-  // 模拟音频数据（当没有真实音频数据时）
-  const drawSimulated = () => {
+  // 绘制真实音频频率数据
+  const drawBars = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -167,108 +74,120 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // 根据canvas宽度动态计算条形数量
-    const minBarWidth = 4;
-    const barSpacing = 1;
-    const barCount = Math.floor(canvas.width / (minBarWidth + barSpacing));
-    const barWidth = canvas.width / barCount;
-    const actualBarWidth = barWidth - barSpacing;
+    const analyser = analyserRef.current;
+    const dataArray = dataArrayRef.current;
 
-    for (let i = 0; i < barCount; i++) {
-      // 生成模拟的音频数据
-      const time = Date.now() * 0.005;
-      const frequency = (i / barCount) * 10;
-      const amplitude = Math.sin(time + frequency) * 0.5 + 0.5;
-      const noise = Math.random() * 0.3;
-      // 确保音波条最低绘制高度为5像素
-      const barHeight = Math.max((amplitude + noise) * canvas.height * 0.8, 7);
-      
-      const x = i * barWidth;
-      const y = canvas.height - barHeight;
-      
-      // 颜色计算
-      const intensity = (amplitude + noise);
-      const hue = 200 + intensity * 160;
-      const saturation = 70 + intensity * 30;
-      const lightness = 40 + intensity * 40;
-      
-      // 创建渐变
-      const gradient = ctx.createLinearGradient(0, y, 0, canvas.height);
-      gradient.addColorStop(0, `hsl(${hue}, ${saturation}%, ${lightness + 20}%)`);
-      gradient.addColorStop(1, `hsl(${hue}, ${saturation}%, ${lightness}%)`);
-      
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x, y, actualBarWidth, barHeight);
-      
-      // 添加发光效果
-      if (intensity > 0.3) {
-        ctx.shadowColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
-        ctx.shadowBlur = 8;
-        ctx.fillRect(x, y, actualBarWidth, barHeight);
-        ctx.shadowBlur = 0;
+    // 条形参数
+    const barSpacing = 8;
+    const maxBarCount = Math.floor(canvas.width / 20);
+    const barCount = Math.max(1, Math.min(maxBarCount, 16));
+    const totalSpacing = (barCount - 1) * barSpacing;
+    const barWidth = Math.max(4, (canvas.width - totalSpacing) / barCount);
+
+    ctx.fillStyle = 'hsl(200, 70%, 50%)';
+
+    if (analyser && dataArray) {
+      // 使用真实音频频率数据
+      analyser.getByteFrequencyData(dataArray as any);
+      const binCount = dataArray.length; // 64 bins (fftSize/2)
+      const binsPerBar = Math.max(1, Math.floor(binCount / barCount));
+
+      for (let i = 0; i < barCount; i++) {
+        // 对每个条形取对应频率bins的平均值
+        let sum = 0;
+        const startBin = i * binsPerBar;
+        for (let j = 0; j < binsPerBar && (startBin + j) < binCount; j++) {
+          sum += dataArray[startBin + j];
+        }
+        const avg = sum / binsPerBar; // 0-255
+        const normalized = avg / 255; // 0-1
+        const barHeight = Math.max(normalized * canvas.height * 0.85, 2);
+
+        const x = i * (barWidth + barSpacing);
+        const y = canvas.height - barHeight;
+        ctx.fillRect(x, y, barWidth, barHeight);
       }
-    }
-
-    // 继续动画
-    if (isPlaying) {
-      animationRef.current = requestAnimationFrame(drawSimulated);
+    } else {
+      // AudioContext不可用时的回退：简单模拟
+      const time = Date.now() / 1000;
+      for (let i = 0; i < barCount; i++) {
+        const amplitude = Math.sin(time + i * 0.3) * 0.5 + 0.5;
+        const barHeight = Math.max(amplitude * canvas.height * 0.5, 4);
+        const x = i * (barWidth + barSpacing);
+        const y = canvas.height - barHeight;
+        ctx.fillRect(x, y, barWidth, barHeight);
+      }
     }
   };
 
-  // 开始/停止动画
+  // 使用setInterval控制动画（不使用requestAnimationFrame）
+  // rAF会让WebView2保持60fps渲染循环，setInterval只在间隔时触发
   useEffect(() => {
     if (isPlaying) {
-      if (analyserRef.current && dataArrayRef.current) {
-        draw();
-      } else {
-        drawSimulated();
-      }
+      drawBars();
+      // 每500ms绘制一次（2fps），降低合成开销
+      timerRef.current = window.setInterval(drawBars, 500);
     } else {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+      if (timerRef.current !== null) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      // 暂停时清空画布
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
       }
     }
 
     return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+      if (timerRef.current !== null) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
       }
     };
   }, [isPlaying]);
 
-  // 恢复音频上下文
-  const resumeAudioContext = async () => {
-    if (audioContext && audioContext.state === 'suspended') {
-      try {
-        await audioContext.resume();
-      } catch (error) {
-        console.error('恢复音频上下文失败:', error);
-      }
-    }
-  };
-
-  // 当播放状态改变时恢复音频上下文
+  // 监听窗口大小变化，更新canvas尺寸
   useEffect(() => {
-    if (isPlaying) {
-      resumeAudioContext();
-    }
-  }, [isPlaying, audioContext]);
+    const updateSize = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const container = canvas.parentElement;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const newWidth = Math.max(Math.floor(rect.width * 0.61), 600);
+      const newHeight = Math.max(Math.floor(rect.height), Math.min(150, height || 150));
+      if (Math.abs(canvas.width - newWidth) > 10 || Math.abs(canvas.height - newHeight) > 5) {
+        canvas.width = newWidth;
+        canvas.height = newHeight;
+      }
+    };
+
+    const initTimer = window.setTimeout(updateSize, 100);
+    window.addEventListener('resize', updateSize);
+
+    return () => {
+      window.clearTimeout(initTimer);
+      window.removeEventListener('resize', updateSize);
+    };
+  }, [height]);
 
   return (
     <div className="w-full h-full flex flex-col">
       <div className="relative flex-1">
         <canvas
           ref={canvasRef}
-          width={canvasSize.width}
-          height={canvasSize.height}
+          width={800}
+          height={150}
           className="w-full h-full block"
           style={{ margin: 0, padding: 0, border: 'none' }}
         />
         
         {/* 播放状态指示器（仅圆点） */}
-        <div className="absolute top-2 right-2 flex items-center bg-black/50 backdrop-blur-sm rounded-full px-3 py-1">
+        <div className="absolute top-2 right-2 flex items-center bg-black/50 rounded-full px-3 py-1">
           <div className={`w-2 h-2 rounded-full ${
-            isPlaying ? 'bg-green-400 animate-pulse' : 'bg-red-400'
+            isPlaying ? 'bg-green-400' : 'bg-red-400'
           }`} />
         </div>
       </div>
@@ -276,4 +195,4 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   );
 };
 
-export default AudioVisualizer;
+export default React.memo(AudioVisualizer);

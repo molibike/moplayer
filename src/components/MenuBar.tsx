@@ -256,7 +256,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
   return (
     <div 
       ref={menuRef} 
-      className="menu-bar bg-gray-900/95 backdrop-blur-md border-b border-gray-700/50 text-white fixed top-0 left-0 right-0 z-50 transition-all duration-300"
+      className="menu-bar bg-gray-900 border-b border-gray-700/50 text-white fixed top-0 left-0 right-0 z-50"
       onMouseEnter={() => setIsVisible(true)}
       onMouseLeave={() => {
         if ((autoHide || isPlaying) && !activeMenu) {
@@ -285,7 +285,7 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
               {activeMenu === menu.key && menu.items && dropdownPos && createPortal(
                 (
                   <div
-                    className="menu-dropdown fixed bg-gray-900/95 backdrop-blur-md border border-gray-700/50 shadow-xl z-[1000] rounded-b-md mt-1"
+                    className="menu-dropdown fixed bg-gray-900 border border-gray-700/50 shadow-xl z-[1000] rounded-b-md mt-1"
                     style={{ left: dropdownPos.left, top: dropdownPos.top, minWidth: dropdownPos.width }}
                     onMouseEnter={() => setIsVisible(true)}
                     ref={(el) => { dropdownRef.current = el; }}

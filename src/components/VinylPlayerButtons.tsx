@@ -71,4 +71,4 @@ const VinylPlayerButtons: React.FC<VinylPlayerButtonsProps> = ({ middleButtonRef
   );
 };
 
-export default VinylPlayerButtons;
+export default React.memo(VinylPlayerButtons);

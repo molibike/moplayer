@@ -67,11 +67,45 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   });
   const [metadata, setMetadata] = useState<AudioMetadata>({});
   const [isDragging] = useState(false);
+  // 跟踪blob URL以便回收内存
+  const coverBlobUrlRef = useRef<string | null>(null);
+  const metadataExtractedSrcRef = useRef<string>('');
+  const onStateChangeRef = useRef(onStateChange);
+  const onErrorRef = useRef(onError);
+  const onEndedRef = useRef(onEnded);
+  const fileNameRef = useRef(fileName);
+  const fileBlobRef = useRef(fileBlob);
+  const lastTimeUpdateRef = useRef(0);
+
+  useEffect(() => {
+    onStateChangeRef.current = onStateChange;
+  }, [onStateChange]);
+
+  useEffect(() => {
+    fileNameRef.current = fileName;
+    fileBlobRef.current = fileBlob;
+  }, [fileName, fileBlob]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
 
   // 处理src变化时的状态重置
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !src) return;
+
+    metadataExtractedSrcRef.current = '';
+    lastTimeUpdateRef.current = 0;
+    if (coverBlobUrlRef.current) {
+      URL.revokeObjectURL(coverBlobUrlRef.current);
+      coverBlobUrlRef.current = null;
+    }
+    setMetadata({});
 
     // 重置音频状态
     audio.currentTime = 0;
@@ -79,7 +113,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     try {
       audio.load();
     } catch {}
-    
+
     const handleLoadStart = () => {
       // 音频开始加载时重置状态
       setPlayerState(prev => ({ 
@@ -103,8 +137,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
           ...prev, 
           isPlaying: false 
         }));
-        if (onError) {
-          onError('自动播放失败，请手动点击播放');
+        if (onErrorRef.current) {
+          onErrorRef.current('自动播放失败，请手动点击播放');
         }
       }
     };
@@ -120,59 +154,44 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) {
-      console.log('音频元素不存在，跳过事件监听器设置');
-      return;
-    }
+    if (!audio) return;
 
-    console.log('设置音频事件监听器...');
     const updateState = (newState: Partial<PlayerState>) => {
       setPlayerState(prev => ({ ...prev, ...newState }));
-      onStateChange(newState);
+      onStateChangeRef.current(newState);
     };
 
     const handleLoadedMetadata = () => {
-      console.log('🎵 音频元数据已加载，开始提取封面图像...');
-      console.log('音频信息:', { 
-        duration: audio.duration, 
-        src: audio.src,
-        fileBlob: !!fileBlob,
-        fileName: fileName
-      });
+      if (metadataExtractedSrcRef.current !== audio.currentSrc) {
+        metadataExtractedSrcRef.current = audio.currentSrc;
+        void extractMetadata(audio);
+      }
       updateState({
         duration: audio.duration,
         currentTime: audio.currentTime,
         volume: audio.volume,
         muted: audio.muted,
       });
-
-      // 尝试提取音频元数据
-      console.log('📥 调用 extractMetadata 函数...');
-      extractMetadata(audio);
     };
 
-    // 添加更多事件监听器来调试
-    const handleLoadStart = () => {
-      console.log('🔊 音频开始加载...');
-    };
-
-    const handleCanPlay = () => {
-      console.log('✅ 音频可以播放');
-    };
+    const handleLoadStart = () => {};
+    const handleCanPlay = () => {};
 
     const handlePlay = () => {
-      console.log('▶️ 音频开始播放');
       updateState({ isPlaying: true });
     };
 
     const handlePause = () => {
-      console.log('⏸️ 音频暂停');
       updateState({ isPlaying: false });
     };
 
     const handleTimeUpdate = () => {
       if (!isDragging) {
-        updateState({ currentTime: audio.currentTime });
+        const now = Date.now();
+        if (now - lastTimeUpdateRef.current >= 1000) {
+          lastTimeUpdateRef.current = now;
+          updateState({ currentTime: audio.currentTime });
+        }
       }
     };
 
@@ -199,14 +218,13 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
         }
       }
       
-      onError?.(errorMessage);
+      onErrorRef.current?.(errorMessage);
     };
 
     const handleEnded = () => {
-      onEnded?.();
+      onEndedRef.current?.();
     };
 
-    console.log('📞 注册音频事件监听器...');
     audio.addEventListener('loadstart', handleLoadStart);
     audio.addEventListener('canplay', handleCanPlay);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
@@ -217,23 +235,12 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     audio.addEventListener('error', handleError);
     audio.addEventListener('ended', handleEnded);
 
-    // 检查音频当前状态
-    console.log('📊 音频当前状态:', {
-      readyState: audio.readyState,
-      networkState: audio.networkState,
-      paused: audio.paused,
-      currentTime: audio.currentTime,
-      duration: audio.duration
-    });
-
     // 如果音频元数据已经加载完成，立即提取元数据
-    if (audio.readyState >= 1) { // HAVE_METADATA or higher
-      console.log('🚀 音频元数据已就绪，立即提取封面图像...');
+    if (audio.readyState >= 1) {
       handleLoadedMetadata();
     }
 
     return () => {
-      console.log('🧹 清理音频事件监听器...');
       audio.removeEventListener('loadstart', handleLoadStart);
       audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
@@ -244,69 +251,43 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       audio.removeEventListener('error', handleError);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [onStateChange, onError, isDragging]);
+  }, [isDragging]);
 
   // 提取音频元数据
   const extractMetadata = async (audio: HTMLAudioElement) => {
-    console.log('extractMetadata 函数开始执行');
     try {
+      const currentFileName = fileNameRef.current;
+      const currentFileBlob = fileBlobRef.current;
       // 优先解析音频内嵌封面与常用标签
       let coverImage: string | undefined;
-      let title = fileName.replace(/\.[^/.]+$/, '');
+      let title = currentFileName.replace(/\.[^/.]+$/, '');
       let artist = '未知艺术家';
       let album = '未知专辑';
 
-      console.log('开始解析音频元数据，文件名:', fileName);
-      console.log('可用数据源:', { fileBlob: !!fileBlob, audioSrc: !!audio.src });
-
       // 如果提供了原始文件Blob，优先使用其进行解析
-      if (fileBlob) {
+      if (currentFileBlob) {
         try {
-          console.log('使用文件Blob解析元数据...');
-          const metadataFromBlob = await mm.parseBlob(fileBlob);
+          const metadataFromBlob = await mm.parseBlob(currentFileBlob);
           const commonFromBlob = metadataFromBlob.common || ({} as any);
-          
-          console.log('Blob解析结果:', {
-            title: commonFromBlob.title,
-            artist: commonFromBlob.artist,
-            album: commonFromBlob.album,
-            hasPicture: commonFromBlob.picture && commonFromBlob.picture.length > 0
-          });
 
           if (commonFromBlob.title) title = commonFromBlob.title;
           if (commonFromBlob.artist) artist = commonFromBlob.artist;
           if (commonFromBlob.album) album = commonFromBlob.album;
-          
+
           if (commonFromBlob.picture && commonFromBlob.picture.length > 0) {
-            console.log('找到封面图片，开始转换...');
             const pic = commonFromBlob.picture[0];
-            console.log('封面信息:', { format: pic.format, dataLength: pic.data.length });
-            
+
             try {
               const imgBlob = new Blob([new Uint8Array(pic.data)], { type: pic.format || 'image/jpeg' });
-              coverImage = await new Promise<string>((resolve) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                  const result = reader.result as string;
-                  console.log('封面转换成功，Data URL长度:', result.length);
-                  console.log('Data URL前缀:', result.substring(0, 100));
-                  resolve(result);
-                };
-                reader.onerror = () => {
-                  console.error('封面转换失败');
-                  resolve(undefined as any);
-                };
-                reader.readAsDataURL(imgBlob);
-              });
+              // 使用blob URL替代data URL，减少base64编解码和内存开销
+              if (coverBlobUrlRef.current) URL.revokeObjectURL(coverBlobUrlRef.current);
+              coverImage = URL.createObjectURL(imgBlob);
+              coverBlobUrlRef.current = coverImage;
             } catch (error) {
-              console.error('封面图像转换错误:', error);
               coverImage = undefined;
             }
-          } else {
-            console.log('文件中未找到封面图片');
           }
-          
-          console.log('设置元数据:', { title, artist, album, hasCover: !!coverImage, coverImageLength: coverImage?.length });
+
           setMetadata({ 
             title: title || '', 
             artist: artist || '', 
@@ -315,24 +296,16 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
           });
           return; // 已解析完成，提前返回
         } catch (e) {
-          console.warn('使用文件Blob解析音频标签失败，回退到audio.src:', e);
+          // 解析失败，回退到audio.src
         }
       }
 
       if (audio.src) {
         try {
-          console.log('使用audio.src解析元数据...');
           const response = await fetch(audio.src);
           const blob = await response.blob();
           const metadata = await mm.parseBlob(blob);
           const common = metadata.common || {} as any;
-
-          console.log('audio.src解析结果:', {
-            title: common.title,
-            artist: common.artist,
-            album: common.album,
-            hasPicture: common.picture && common.picture.length > 0
-          });
 
           // 标题/艺术家/专辑优先用标签
           if (common.title) title = common.title;
@@ -341,36 +314,19 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
 
           // 提取封面图片
           if (common.picture && common.picture.length > 0) {
-            console.log('找到封面图片，开始转换...');
             const pic = common.picture[0];
-            console.log('封面信息:', { format: pic.format, dataLength: pic.data.length });
-            
+
             try {
               const imgBlob = new Blob([new Uint8Array(pic.data)], { type: pic.format || 'image/jpeg' });
-              coverImage = await new Promise<string>((resolve) => {
-                const reader = new FileReader();
-                reader.onload = () => {
-                  const result = reader.result as string;
-                  console.log('封面转换成功，Data URL长度:', result.length);
-                  console.log('Data URL前缀:', result.substring(0, 100));
-                  resolve(result);
-                };
-                reader.onerror = () => {
-                  console.error('封面转换失败');
-                  resolve(undefined as any);
-                };
-                reader.readAsDataURL(imgBlob);
-              });
+              // 使用blob URL替代data URL
+              if (coverBlobUrlRef.current) URL.revokeObjectURL(coverBlobUrlRef.current);
+              coverImage = URL.createObjectURL(imgBlob);
+              coverBlobUrlRef.current = coverImage;
             } catch (error) {
-              console.error('封面图像转换错误:', error);
               coverImage = undefined;
             }
-          } else {
-            console.log('文件中未找到封面图片');
           }
-          
-          // 在使用audio.src解析成功后立即设置元数据
-          console.log('audio.src解析设置元数据:', { title, artist, album, hasCover: !!coverImage, coverImageLength: coverImage?.length });
+
           setMetadata({ 
             title: title || '', 
             artist: artist || '', 
@@ -378,11 +334,6 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             coverImage 
           });
         } catch (e) {
-          // 解析失败时回退为文件名解析
-          console.warn('音频标签解析失败，使用文件名信息作为替代:', e);
-          
-          // 即使解析失败也要设置默认元数据
-          console.log('回退设置元数据:', { title, artist, album, hasCover: !!coverImage });
           setMetadata({ 
             title: title || '', 
             artist: artist || '', 
@@ -391,8 +342,6 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
           });
         }
       } else {
-        // 如果没有audio.src，直接设置默认元数据
-        console.log('直接设置默认元数据:', { title, artist, album, hasCover: !!coverImage });
         setMetadata({ 
           title: title || '', 
           artist: artist || '', 
@@ -401,11 +350,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
         });
       }
     } catch (error) {
-      console.error('元数据提取失败:', error);
-      // 即使解析失败也要设置默认元数据
-      console.error('元数据提取失败，设置默认元数据:', error);
       setMetadata({
-        title: fileName.replace(/\.[^/.]+$/, ''),
+        title: fileNameRef.current.replace(/\.[^/.]+$/, ''),
         artist: '未知艺术家',
         album: '未知专辑',
         coverImage: undefined,
@@ -413,25 +359,24 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     }
   };
 
+  useEffect(() => {
+    return () => {
+      if (coverBlobUrlRef.current) {
+        URL.revokeObjectURL(coverBlobUrlRef.current);
+        coverBlobUrlRef.current = null;
+      }
+    };
+  }, []);
+
   const handlePlayPause = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio) {
-      console.log('音频元素不存在');
-      return;
-    }
-    
-    // 直接检查音频元素的播放状态，而不是依赖本地状态
-    const isCurrentlyPlaying = !audio.paused;
-    console.log('点击播放/暂停，音频元素当前状态:', { paused: audio.paused, isCurrentlyPlaying });
-    
-    if (isCurrentlyPlaying) {
-      console.log('暂停音频');
+    if (!audio) return;
+
+    if (!audio.paused) {
       audio.pause();
     } else {
-      console.log('播放音频');
       audio.play().catch(err => {
-        console.error('播放失败:', err);
-        onError?.('播放失败: ' + err.message);
+        onErrorRef.current?.('播放失败: ' + err.message);
       });
     }
   }, [onError]);
@@ -439,6 +384,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   const handleVolumeUp = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
+
     
     const newVolume = Math.min(1, audio.volume + 0.1);
     audio.volume = newVolume;
@@ -498,7 +444,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   }, [handlePlayPause, handleVolumeUp, handleVolumeDown, handleMute, handleSeekForward, handleSeekBackward, handleSeek]);
 
   return (
-    <div className="relative bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex-1 flex w-full h-full border-5 border-gray-700"
+    <div className="relative flex-1 flex w-full h-full border-5 border-gray-700"
          style={{ border: '5px solid #374151' }}
          onClick={handlePlayPause}>
       {/* 隐藏的音频元素 */}

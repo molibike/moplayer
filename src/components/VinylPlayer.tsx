@@ -11,9 +11,11 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
   coverImage,
   buttonElement,
 }) => {
-  const [rotation, setRotation] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const diskRef = useRef<HTMLDivElement>(null);
+  // JS旋转替代CSS动画：CSS animation会驱动合成器60fps，JS setInterval只在触发时合成
+  const angleRef = useRef(0);
+  const rotationTimerRef = useRef<number | null>(null);
   const [geom, setGeom] = useState<{
     angleDeg: number;
     seg1: { x: number; y: number; len: number };
@@ -21,26 +23,6 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
     joint: { x: number; y: number };
     stylus: { x: number; y: number };
   }>({ angleDeg: 0, seg1: { x: 0, y: 0, len: 0 }, seg2: { x: 0, y: 0, len: 0 }, joint: { x: 0, y: 0 }, stylus: { x: 0, y: 0 } });
-
-  // 旋转动画效果
-  useEffect(() => {
-    let animationFrame: number;
-    
-    const animate = () => {
-      if (isPlaying) {
-        setRotation(prev => (prev + 0.5) % 360);
-      }
-      animationFrame = requestAnimationFrame(animate);
-    };
-    
-    animationFrame = requestAnimationFrame(animate);
-    
-    return () => {
-      cancelAnimationFrame(animationFrame);
-    };
-  }, [isPlaying]);
-
-
 
   // 计算几何坐标：按钮中心 -> 关节 -> 唱针
   useLayoutEffect(() => {
@@ -90,29 +72,46 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
     return () => window.removeEventListener('resize', compute);
   }, [buttonElement]);
 
-  // 调试信息：显示封面图像状态
-  console.log('VinylPlayer received coverImage:', { 
-    hasCoverImage: !!coverImage,
-    coverImageLength: coverImage?.length,
-    coverImageType: coverImage?.substring(0, 50),
-    coverImagePrefix: coverImage?.substring(0, 30)
-  });
+  // 使用setInterval替代CSS animation进行唱片旋转
+  // CSS animation: spin 6s → 合成器60fps持续运行
+  // setInterval 100ms → 仅10fps触发合成，减少83%合成器工作量
+  useEffect(() => {
+    if (isPlaying) {
+      rotationTimerRef.current = window.setInterval(() => {
+        // 6度/100ms = 60度/秒 = 6秒一圈（与原CSS动画一致）
+        angleRef.current = (angleRef.current + 6) % 360;
+        if (diskRef.current) {
+          diskRef.current.style.transform = `rotate(${angleRef.current}deg)`;
+        }
+      }, 100);
+    } else {
+      if (rotationTimerRef.current !== null) {
+        window.clearInterval(rotationTimerRef.current);
+        rotationTimerRef.current = null;
+      }
+    }
+
+    return () => {
+      if (rotationTimerRef.current !== null) {
+        window.clearInterval(rotationTimerRef.current);
+        rotationTimerRef.current = null;
+      }
+    };
+  }, [isPlaying]);
 
   return (
     <div className="flex items-end justify-center w-full h-full p-4">
       {/* 唱片机底座 */}
       <div ref={containerRef} className="relative" style={{ width: '80%', aspectRatio: '1' }}>
         {/* 唱片机外框 */}
-        <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 rounded-full shadow-2xl border-4 border-gray-700 flex items-center justify-center">
-          {/* 唱片 */}
+        <div className="w-full h-full bg-gray-850 rounded-full border-4 border-gray-700 flex items-center justify-center" style={{ backgroundColor: '#1a1a2e' }}>
+          {/* 唱片 - 使用JS setInterval旋转替代CSS animation，降低合成器帧率 */}
           <div 
             ref={diskRef}
-            className="rounded-full relative overflow-hidden shadow-inner"
+            className="rounded-full relative"
             style={{
               width: '90%',
               height: '90%',
-              transform: `rotate(${rotation}deg)`,
-              transition: isPlaying ? 'none' : 'transform 0.5s ease-out',
               ...(coverImage ? {
                 backgroundImage: `url(${coverImage})`,
                 backgroundSize: 'cover',
@@ -124,14 +123,7 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
             }}
           >
             {/* 中心孔 */}
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-gray-800 rounded-full border-2 border-gray-600 shadow-inner" />
-            
-            {/* 调试信息：显示封面图像状态 */}
-            {process.env.NODE_ENV === 'development' && (
-              <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white text-xs p-1 rounded">
-                Cover: {coverImage ? 'Yes' : 'No'}
-              </div>
-            )}
+            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-6 h-6 bg-gray-800 rounded-full border-2 border-gray-600" />
             
             {/* 如果没有封面，显示音乐符号 */}
             {!coverImage && (
@@ -145,7 +137,7 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
         {/* 播放手柄：两节连接杆设计，从按钮连接点连接到唱片边缘 */}
         {/* 第一段连接杆：从按钮几何中心到关节 */}
         <div 
-          className="bg-gradient-to-b from-gray-500 to-gray-700 shadow-lg"
+          className="bg-gray-600"
           style={{
             position: 'fixed',
             top: `${geom.seg1.y}px`,
@@ -161,7 +153,7 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
         
         {/* 连接关节：两段连接杆的连接点，实时连接 */}
         <div 
-          className="bg-gray-600 border-2 border-gray-500 rounded-full shadow-md"
+          className="bg-gray-600 border-2 border-gray-500 rounded-full"
           style={{
             position: 'fixed',
             top: `${geom.joint.y}px`,
@@ -175,7 +167,7 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
         
         {/* 第二段连接杆：从关节到唱针位置（唱片半径的40%处） */}
         <div 
-          className="bg-gradient-to-b from-gray-600 to-gray-800 shadow-lg"
+          className="bg-gray-700"
           style={{
             position: 'fixed',
             top: `${geom.seg2.y}px`,
@@ -191,7 +183,7 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
 
         {/* 唱针：位于唱片半径的40%处 */}
         <div
-          className="bg-gray-300 rounded-full shadow-sm"
+          className="bg-gray-300 rounded-full"
           style={{
             position: 'fixed',
             top: `${geom.stylus.y}px`,
@@ -207,9 +199,9 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
           <div 
             className={`rounded-full ${
               isPlaying 
-                ? 'bg-green-400 shadow-green-400/50 animate-pulse' 
-                : 'bg-red-400 shadow-red-400/50'
-            } shadow-lg`}
+                ? 'bg-green-400' 
+                : 'bg-red-400'
+            }`}
             style={{ width: '12px', height: '12px' }}
           />
         </div>
@@ -218,4 +210,4 @@ const VinylPlayer: React.FC<VinylPlayerProps> = ({
   );
 };
 
-export default VinylPlayer;
+export default React.memo(VinylPlayer);

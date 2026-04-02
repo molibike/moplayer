@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -623,9 +623,9 @@ function App() {
     }
   };
 
-  const handlePlayerStateChange = (newState: Partial<PlayerState>) => {
+  const handlePlayerStateChange = useCallback((newState: Partial<PlayerState>) => {
     setPlayerState(prev => ({ ...prev, ...newState }));
-  };
+  }, []);
 
   // 窗口拖拽功能 - 全窗口拖拽
   useEffect(() => {

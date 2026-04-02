@@ -177,6 +177,20 @@ input[type="range"]::-moz-range-thumb {
   overflow: hidden;
 }
 
+/* 唱片旋转动画 - 使用CSS动画替代React state更新 */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin 6s linear infinite;
+}
+
 /* 文件拖拽区域动画 */
 .drop-zone {
   transition: all 0.3s ease;

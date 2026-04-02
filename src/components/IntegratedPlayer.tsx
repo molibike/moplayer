@@ -255,25 +255,12 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
 
   const handlePlayPause = useCallback(() => {
     const video = videoRef.current;
-    if (!video) {
-      console.log('视频元素不存在');
-      return;
-    }
-    
-    console.log('点击播放/暂停，当前状态:', playerState.isPlaying);
-    console.log('视频元素状态:', {
-      paused: video.paused,
-      readyState: video.readyState,
-      src: video.src
-    });
+    if (!video) return;
     
     if (playerState.isPlaying) {
-      console.log('暂停视频');
       video.pause();
     } else {
-      console.log('播放视频');
       video.play().catch(err => {
-        console.error('播放失败:', err);
         onError?.('播放失败: ' + err.message);
       });
     }

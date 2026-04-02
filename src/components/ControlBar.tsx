@@ -546,7 +546,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
           {/* 播放列表下拉菜单 */}
           {showPlaylist && (
             <div 
-              className="absolute bottom-full right-0 mb-2 bg-gray-900/95 backdrop-blur-md border border-gray-700/50 shadow-xl rounded-md overflow-y-auto z-50"
+              className="absolute bottom-full right-0 mb-2 bg-gray-900 border border-gray-700/50 shadow-xl rounded-md overflow-y-auto z-50"
               style={{
                 minWidth: '256px',
                 maxWidth: '38vw',
