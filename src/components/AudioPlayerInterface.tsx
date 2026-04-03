@@ -1,14 +1,23 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import * as mm from 'music-metadata-browser';
-import VinylPlayer from './VinylPlayer';
+import VinylPlayer from './VinylPlayer.tsx';
 import AudioInfo from './AudioInfo';
 import AudioVisualizer from './AudioVisualizer';
 import VinylPlayerButtons from './VinylPlayerButtons';
-import { searchLyricsOnline, parseLyrics } from '../utils/lyrics';
+import { parseLyrics } from '../utils/lyrics';
+
+import { invoke } from '@tauri-apps/api/core';
 
 // 导入 Buffer polyfill
 import { Buffer } from 'buffer';
 globalThis.Buffer = Buffer;
+
+interface LyricsCandidate {
+  source: string;
+  title: string;
+  artist: string;
+  lyrics: string;
+}
 
 interface PlayerState {
   isPlaying: boolean;
@@ -25,12 +34,14 @@ interface AudioMetadata {
   coverImage?: string;
   lyrics?: string;
   lyricsLines?: import('../utils/lyrics').LyricLine[];
+  lyricsSource?: string;
 }
 
 interface AudioPlayerInterfaceProps {
   src: string;
   fileName: string;
   fileBlob?: File;
+  filePath?: string;
   onStateChange: (state: Partial<PlayerState>) => void;
   onError?: (error: string) => void;
   onPlayPause?: React.MutableRefObject<(() => void) | null>;
@@ -47,6 +58,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   src, 
   fileName,
   fileBlob,
+  filePath,
   onStateChange, 
   onError,
   onPlayPause: externalPlayPause,
@@ -58,7 +70,6 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   onSeekTo: externalSeekTo,
   onEnded,
 }) => {
-  // 用于精确计算中间按钮的几何中心
   const middleButtonRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playerState, setPlayerState] = useState<PlayerState>({
@@ -78,7 +89,9 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   });
   const [isDragging] = useState(false);
   const [isSearchingLyrics, setIsSearchingLyrics] = useState(false);
-  // 跟踪blob URL以便回收内存
+  const [isSavingLyrics, setIsSavingLyrics] = useState(false);
+  const [lyricsCandidates, setLyricsCandidates] = useState<LyricsCandidate[]>([]);
+  const [currentLyricsIndex, setCurrentLyricsIndex] = useState(0);
   const coverBlobUrlRef = useRef<string | null>(null);
   const metadataExtractedSrcRef = useRef<string>('');
   const onStateChangeRef = useRef(onStateChange);
@@ -86,16 +99,12 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   const onEndedRef = useRef(onEnded);
   const fileNameRef = useRef(fileName);
   const fileBlobRef = useRef(fileBlob);
+  const filePathRef = useRef(filePath);
   const lastTimeUpdateRef = useRef(0);
 
   useEffect(() => {
     onStateChangeRef.current = onStateChange;
   }, [onStateChange]);
-
-  useEffect(() => {
-    fileNameRef.current = fileName;
-    fileBlobRef.current = fileBlob;
-  }, [fileName, fileBlob]);
 
   useEffect(() => {
     onErrorRef.current = onError;
@@ -105,7 +114,297 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     onEndedRef.current = onEnded;
   }, [onEnded]);
 
-  // 处理src变化时的状态重置
+  useEffect(() => {
+    fileNameRef.current = fileName;
+    fileBlobRef.current = fileBlob;
+    filePathRef.current = filePath;
+  }, [fileName, fileBlob, filePath]);
+
+  const isLikelySuspiciousArtist = useCallback((text: string): boolean => {
+    const value = (text || '').trim();
+    if (!value || value === '未知艺术家') return true;
+
+    if (/https?:\/\//i.test(value)) return true;
+    if (/^[a-z0-9_\-]{12,}$/i.test(value.replace(/\s+/g, ''))) return true;
+    if (/\.(mp3|flac|wav|m4a|ape|aac|ogg)$/i.test(value)) return true;
+    if (/^[a-z][a-z0-9_\-.\s]{8,}$/i.test(value) && !/[\u4e00-\u9fa5]/.test(value)) return true;
+
+    return false;
+  }, []);
+
+  const isLikelySuspiciousTitle = useCallback((text: string): boolean => {
+    const value = (text || '').trim();
+    if (!value) return true;
+
+    if (/https?:\/\//i.test(value)) return true;
+    if (/\.(mp3|flac|wav|m4a|ape|aac|ogg)$/i.test(value)) return true;
+    if (/^[a-z0-9_-]{16,}$/i.test(value.replace(/\s+/g, ''))) return true;
+    if (value.length > 60) return true;
+    if ((value.match(/[\-_]/g) || []).length >= 6) return true;
+    if ((value.match(/[a-z0-9]/gi) || []).length > 20 && !/[\u4e00-\u9fa5]/.test(value) && !/\s/.test(value)) return true;
+
+    return false;
+  }, []);
+
+  const normalizeTitleForSearch = useCallback((text: string): string => {
+    const value = (text || '').trim();
+    if (!value) return '';
+
+    const quotedMatch = value.match(/[“"'《「『]([^”"'》」』]{1,30})[”"'》」』]/);
+    if (quotedMatch?.[1]?.trim()) {
+      return quotedMatch[1].trim();
+    }
+
+    return value
+      .replace(/^\d{2,4}\s*版/g, '')
+      .replace(/^\d{2,4}年?版/g, '')
+      .replace(/(主题曲|片头曲|片尾曲|插曲|原声版|电视剧版|电影版|现场版|Live版|完整版|超清版|高清版)/gi, '')
+      .replace(/[“”"'《》「」『』]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }, []);
+
+  const extractInfoFromFileName = useCallback((name: string) => {
+    const nameWithoutExt = name
+      .replace(/\.[^/.]+$/, '')
+      .replace(/^\d+[._\-\s]+/, '')
+      .replace(/\s*\[(HQ|FLAC|MP3|128K|320K|无损|高音质|超高音质|标准音质)\]\s*/gi, '')
+      .replace(/\s*\((HQ|FLAC|MP3|128K|320K|无损|高音质|超高音质|标准音质)\)\s*/gi, '')
+      .replace(/\s*-(\s*copy)?\s*$/i, '')
+      .replace(/\s*-\s*副本\s*$/i, '')
+      .trim();
+    const parts = nameWithoutExt.split(' - ');
+
+    if (parts.length >= 2) {
+      return {
+        artist: parts[0].trim(),
+
+        title: parts.slice(1).join(' - ').trim(),
+      };
+    }
+
+    return {
+      title: nameWithoutExt,
+      artist: '未知艺术家',
+    };
+  }, []);
+
+  const cleanForSearch = useCallback((text: string): string => {
+    return text
+      .replace(/\([^)]*\)/g, '')
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/【[^】]*】/g, '')
+      .replace(/\[(HQ|FLAC|MP3|128K|320K|无损|高音质|超高音质|标准音质)\]/gi, '')
+      .replace(/\((HQ|FLAC|MP3|128K|320K|无损|高音质|超高音质|标准音质)\)/gi, '')
+      .replace(/(\(Live\)|\[Live\]|（Live）|【Live】)/gi, '')
+      .replace(/(\(Remix\)|\[Remix\]|（Remix）|【Remix】)/gi, '')
+      .replace(/(\(Cover\)|\[Cover\]|（Cover）|【Cover】)/gi, '')
+      .replace(/(\(伴奏\)|\[伴奏\]|（伴奏）|【伴奏】)/g, '')
+      .replace(/(主题曲|片头曲|片尾曲|插曲|原声版|电视剧版|电影版|现场版|完整版|超清版|高清版)/gi, '')
+      .replace(/[“”"'《》「」『』]/g, '')
+      .replace(/^\d{2,4}\s*版/g, '')
+      .replace(/^\d{2,4}年?版/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }, []);
+
+  const searchLyricsCandidatesWithBackend = useCallback(async (rawTitle: string, rawArtist: string) => {
+    const normalizedTitle = normalizeTitleForSearch(rawTitle || '');
+    const title = cleanForSearch(normalizedTitle || rawTitle || '');
+    const artist = isLikelySuspiciousArtist(rawArtist || '') ? '' : cleanForSearch(rawArtist || '');
+
+    if (!title) return [] as LyricsCandidate[];
+
+    window.console.log('[歌词搜索] 拉取歌词候选:', {
+      rawTitle,
+      rawArtist,
+      normalizedTitle,
+      finalTitle: title,
+      finalArtist: artist,
+    });
+
+    const candidates = await invoke<LyricsCandidate[]>('search_lyrics_candidates', { title, artist });
+    return Array.isArray(candidates) ? candidates.filter(item => item?.lyrics?.trim()) : [];
+  }, [cleanForSearch, isLikelySuspiciousArtist, normalizeTitleForSearch]);
+
+  const applyLyricsCandidate = useCallback((candidate: LyricsCandidate, index: number) => {
+    setCurrentLyricsIndex(index);
+    setMetadata(prev => ({
+      ...prev,
+      lyrics: candidate.lyrics,
+      lyricsLines: parseLyrics(candidate.lyrics),
+      lyricsSource: candidate.source,
+      title: prev.title || candidate.title,
+      artist: prev.artist || candidate.artist,
+    }));
+  }, []);
+
+  const loadLocalLyrics = useCallback(async () => {
+    const currentFilePath = filePathRef.current;
+    if (!currentFilePath) return null;
+
+    try {
+      const localLyrics = await invoke<string | null>('load_local_lyrics', { audioPath: currentFilePath });
+      if (localLyrics && localLyrics.trim()) {
+        return localLyrics;
+      }
+    } catch (error) {
+      window.console.error('[歌词搜索] 读取本地歌词失败:', error);
+    }
+
+    return null;
+  }, []);
+
+  const applyMetadata = useCallback((next: {
+    title: string;
+    artist: string;
+    album: string;
+    coverImage?: string;
+    lyrics: string;
+    lyricsSource?: string;
+  }) => {
+    setMetadata({
+      title: next.title,
+      artist: next.artist,
+      album: next.album,
+      coverImage: next.coverImage,
+      lyrics: next.lyrics,
+      lyricsLines: next.lyrics ? parseLyrics(next.lyrics) : [],
+      lyricsSource: next.lyricsSource,
+    });
+  }, []);
+
+  const updateLyricsFromBackend = useCallback((title: string, artist: string) => {
+    setIsSearchingLyrics(true);
+    void searchLyricsCandidatesWithBackend(title, artist)
+      .then(candidates => {
+        setLyricsCandidates(candidates);
+        if (candidates.length > 0) {
+          applyLyricsCandidate(candidates[0], 0);
+        }
+      })
+      .catch(error => {
+        window.console.error('[歌词搜索] 自动搜索失败:', error);
+      })
+      .finally(() => {
+        setIsSearchingLyrics(false);
+      });
+  }, [applyLyricsCandidate, searchLyricsCandidatesWithBackend]);
+
+  const extractMetadata = useCallback(async (audio: HTMLAudioElement) => {
+    try {
+      const currentFileName = fileNameRef.current;
+      const currentFileBlob = fileBlobRef.current;
+      const fileNameInfo = extractInfoFromFileName(currentFileName);
+      let coverImage: string | undefined;
+      let lyrics = '';
+      let title = fileNameInfo.title;
+      let artist = fileNameInfo.artist;
+      let album = '未知专辑';
+
+      const mergeCommon = (common: any) => {
+        if (common.title && common.title.trim()) title = common.title;
+        if (common.artist && common.artist.trim()) {
+          artist = common.artist;
+        } else if (Array.isArray(common.artists) && common.artists.length > 0) {
+          artist = common.artists.join(' / ');
+        }
+        if (common.album && common.album.trim()) album = common.album;
+        if (Array.isArray(common.lyrics) && common.lyrics.length > 0) {
+          lyrics = common.lyrics.join('\n').trim();
+        }
+        if (common.picture && common.picture.length > 0) {
+          const pic = common.picture[0];
+          const imgBlob = new Blob([new Uint8Array(pic.data)], { type: pic.format || 'image/jpeg' });
+          if (coverBlobUrlRef.current) URL.revokeObjectURL(coverBlobUrlRef.current);
+          coverImage = URL.createObjectURL(imgBlob);
+          coverBlobUrlRef.current = coverImage;
+        }
+      };
+
+      if (currentFileBlob) {
+        try {
+          window.console.log('[元数据] 开始解析Blob:', currentFileBlob.name);
+          const metadataFromBlob = await mm.parseBlob(currentFileBlob);
+          window.console.log('[元数据] 解析结果:', metadataFromBlob);
+          mergeCommon(metadataFromBlob.common || {});
+        } catch (error) {
+          window.console.error('[元数据] Blob解析失败，回退audio.src:', error);
+        }
+      }
+
+      if ((!currentFileBlob || (!title && !artist)) && audio.src) {
+        try {
+          const response = await fetch(audio.src);
+          const blob = await response.blob();
+          const parsed = await mm.parseBlob(blob);
+          mergeCommon(parsed.common || {});
+        } catch (error) {
+          window.console.error('[元数据] audio.src解析失败:', error);
+        }
+      }
+
+      if (!title) title = fileNameInfo.title;
+      if (!artist || artist === '未知艺术家') artist = fileNameInfo.artist;
+
+      if (isLikelySuspiciousTitle(title)) {
+        title = fileNameInfo.title;
+      }
+
+      const normalizedTitle = normalizeTitleForSearch(title || fileNameInfo.title);
+      const finalArtist = isLikelySuspiciousArtist(artist) ? fileNameInfo.artist : artist;
+      title = isLikelySuspiciousTitle(normalizedTitle) ? fileNameInfo.title : (normalizedTitle || fileNameInfo.title);
+      artist = finalArtist || '未知艺术家';
+
+      window.console.log('[元数据] 最终采用:', {
+        title,
+        artist,
+        album,
+        originalFileNameTitle: fileNameInfo.title,
+        originalFileNameArtist: fileNameInfo.artist,
+      });
+      const localLyrics = !lyrics ? await loadLocalLyrics() : null;
+      const finalLyrics = lyrics || localLyrics || '';
+
+      applyMetadata({
+        title,
+        artist,
+        album,
+        coverImage,
+        lyrics: finalLyrics,
+        lyricsSource: lyrics ? '内嵌歌词' : localLyrics ? '本地歌词' : undefined,
+      });
+
+      if (localLyrics) {
+        setLyricsCandidates([
+          {
+            source: 'local',
+            title,
+            artist,
+            lyrics: localLyrics,
+          },
+        ]);
+        setCurrentLyricsIndex(0);
+      } else if (!lyrics && title) {
+        setLyricsCandidates([]);
+        setCurrentLyricsIndex(0);
+        updateLyricsFromBackend(title, artist);
+      }
+    } catch (error) {
+      window.console.error('[元数据] 提取失败:', error);
+      const fileNameInfo = extractInfoFromFileName(fileNameRef.current);
+
+      applyMetadata({
+        title: normalizeTitleForSearch(fileNameInfo.title),
+        artist: isLikelySuspiciousArtist(fileNameInfo.artist) ? '未知艺术家' : fileNameInfo.artist,
+        album: '未知专辑',
+        coverImage: undefined,
+        lyrics: '',
+        lyricsSource: undefined,
+      });
+    }
+  }, [applyMetadata, extractInfoFromFileName, isLikelySuspiciousArtist, isLikelySuspiciousTitle, loadLocalLyrics, normalizeTitleForSearch, updateLyricsFromBackend]);
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !src) return;
@@ -116,50 +415,45 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       URL.revokeObjectURL(coverBlobUrlRef.current);
       coverBlobUrlRef.current = null;
     }
-    setMetadata({});
 
-    // 重置音频状态
+    setMetadata({
+      title: '',
+      artist: '',
+      album: '',
+      coverImage: undefined,
+      lyrics: '',
+      lyricsLines: [],
+      lyricsSource: undefined,
+    });
+    setLyricsCandidates([]);
+    setCurrentLyricsIndex(0);
+
     audio.currentTime = 0;
-    // 确保切换音源后重新加载
     try {
       audio.load();
     } catch {}
 
     const handleLoadStart = () => {
-      // 音频开始加载时重置状态
-      setPlayerState(prev => ({ 
-        ...prev, 
-        currentTime: 0, 
-        isPlaying: false 
-      }));
+      setPlayerState(prev => ({ ...prev, currentTime: 0, isPlaying: false }));
     };
 
     const handleCanPlay = async () => {
-      // 音频可以播放时，自动开始播放
       try {
         await audio.play();
-        setPlayerState(prev => ({ 
-          ...prev, 
-          isPlaying: true 
-        }));
+        setPlayerState(prev => ({ ...prev, isPlaying: true }));
       } catch (error) {
         console.error('自动播放失败:', error);
-        setPlayerState(prev => ({ 
-          ...prev, 
-          isPlaying: false 
-        }));
-        if (onErrorRef.current) {
-          onErrorRef.current('自动播放失败，请手动点击播放');
-        }
+        setPlayerState(prev => ({ ...prev, isPlaying: false }));
+        onErrorRef.current?.('自动播放失败，请手动点击播放');
       }
     };
 
-    audio.addEventListener('canplay', handleCanPlay);
     audio.addEventListener('loadstart', handleLoadStart);
-    
+    audio.addEventListener('canplay', handleCanPlay);
+
     return () => {
-      audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('loadstart', handleLoadStart);
+      audio.removeEventListener('canplay', handleCanPlay);
     };
   }, [src]);
 
@@ -177,6 +471,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
         metadataExtractedSrcRef.current = audio.currentSrc;
         void extractMetadata(audio);
       }
+
       updateState({
         duration: audio.duration,
         currentTime: audio.currentTime,
@@ -185,33 +480,13 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       });
     };
 
-    const handleLoadStart = () => {};
-    const handleCanPlay = () => {};
-
-    const handlePlay = () => {
-      updateState({ isPlaying: true });
-    };
-
-    const handlePause = () => {
-      updateState({ isPlaying: false });
-    };
-
-    const handleTimeUpdate = () => {
-      if (!isDragging) {
-        const now = Date.now();
-        if (now - lastTimeUpdateRef.current >= 1000) {
-          lastTimeUpdateRef.current = now;
-          updateState({ currentTime: audio.currentTime });
-        }
-      }
-    };
-
+    const handlePlay = () => updateState({ isPlaying: true });
+    const handlePause = () => updateState({ isPlaying: false });
     const handleVolumeChange = () => updateState({ volume: audio.volume, muted: audio.muted });
-
+    const handleEnded = () => onEndedRef.current?.();
     const handleError = () => {
       const error = audio.error;
       let errorMessage = '未知错误';
-      
       if (error) {
         switch (error.code) {
           case MediaError.MEDIA_ERR_ABORTED:
@@ -228,16 +503,18 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             break;
         }
       }
-      
       onErrorRef.current?.(errorMessage);
     };
-
-    const handleEnded = () => {
-      onEndedRef.current?.();
+    const handleTimeUpdate = () => {
+      if (!isDragging) {
+        const now = Date.now();
+        if (now - lastTimeUpdateRef.current >= 1000) {
+          lastTimeUpdateRef.current = now;
+          updateState({ currentTime: audio.currentTime });
+        }
+      }
     };
 
-    audio.addEventListener('loadstart', handleLoadStart);
-    audio.addEventListener('canplay', handleCanPlay);
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('timeupdate', handleTimeUpdate);
     audio.addEventListener('play', handlePlay);
@@ -246,14 +523,11 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     audio.addEventListener('error', handleError);
     audio.addEventListener('ended', handleEnded);
 
-    // 如果音频元数据已经加载完成，立即提取元数据
     if (audio.readyState >= 1) {
       handleLoadedMetadata();
     }
 
     return () => {
-      audio.removeEventListener('loadstart', handleLoadStart);
-      audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
       audio.removeEventListener('play', handlePlay);
@@ -262,175 +536,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       audio.removeEventListener('error', handleError);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [isDragging]);
-
-  // 提取音频元数据
-  const extractMetadata = async (audio: HTMLAudioElement) => {
-    try {
-      const currentFileName = fileNameRef.current;
-      const currentFileBlob = fileBlobRef.current;
-      let coverImage: string | undefined;
-      let lyrics = '';
-      let title = currentFileName.replace(/\.[^/.]+$/, '');
-      let artist = '未知艺术家';
-      let album = '未知专辑';
-
-      // 如果提供了原始文件Blob，优先使用其进行解析
-      if (currentFileBlob) {
-        try {
-          const metadataFromBlob = await mm.parseBlob(currentFileBlob);
-          const commonFromBlob = metadataFromBlob.common || ({} as any);
-
-          if (commonFromBlob.title) title = commonFromBlob.title;
-          if (commonFromBlob.artist) artist = commonFromBlob.artist;
-          if (commonFromBlob.album) album = commonFromBlob.album;
-          if (Array.isArray(commonFromBlob.lyrics) && commonFromBlob.lyrics.length > 0) {
-            lyrics = commonFromBlob.lyrics.join('\n').trim();
-          }
-
-          if (commonFromBlob.picture && commonFromBlob.picture.length > 0) {
-            const pic = commonFromBlob.picture[0];
-
-            try {
-              const imgBlob = new Blob([new Uint8Array(pic.data)], { type: pic.format || 'image/jpeg' });
-              // 使用blob URL替代data URL，减少base64编解码和内存开销
-              if (coverBlobUrlRef.current) URL.revokeObjectURL(coverBlobUrlRef.current);
-              coverImage = URL.createObjectURL(imgBlob);
-              coverBlobUrlRef.current = coverImage;
-            } catch (error) {
-              coverImage = undefined;
-            }
-          }
-
-          setMetadata({ 
-            title: title || '', 
-            artist: artist || '', 
-            album: album || '', 
-            coverImage,
-            lyrics,
-            lyricsLines: lyrics ? parseLyrics(lyrics) : []
-          });
-          
-          // 如果没有内嵌歌词，尝试联网搜索
-          if (!lyrics && title) {
-            setIsSearchingLyrics(true);
-            void searchLyricsOnline(title, artist).then(externalLyrics => {
-              if (externalLyrics) {
-                setMetadata(prev => ({
-                  ...prev,
-                  lyrics: externalLyrics,
-                  lyricsLines: parseLyrics(externalLyrics)
-                }));
-              }
-            }).catch(() => {}).finally(() => {
-              setIsSearchingLyrics(false);
-            });
-          }
-          
-          return; // 已解析完成，提前返回
-        } catch (e) {
-          // 解析失败，回退到audio.src
-        }
-      }
-
-      if (audio.src) {
-        try {
-          const response = await fetch(audio.src);
-          const blob = await response.blob();
-          const metadata = await mm.parseBlob(blob);
-          const common = metadata.common || {} as any;
-
-          if (common.title) title = common.title;
-          if (common.artist) artist = common.artist;
-          if (common.album) album = common.album;
-          if (Array.isArray(common.lyrics) && common.lyrics.length > 0) {
-            lyrics = common.lyrics.join('\n').trim();
-          }
-
-          if (common.picture && common.picture.length > 0) {
-            const pic = common.picture[0];
-
-            try {
-              const imgBlob = new Blob([new Uint8Array(pic.data)], { type: pic.format || 'image/jpeg' });
-              // 使用blob URL替代data URL
-              if (coverBlobUrlRef.current) URL.revokeObjectURL(coverBlobUrlRef.current);
-              coverImage = URL.createObjectURL(imgBlob);
-              coverBlobUrlRef.current = coverImage;
-            } catch (error) {
-              coverImage = undefined;
-            }
-          }
-
-          setMetadata({ 
-            title: title || '', 
-            artist: artist || '', 
-            album: album || '', 
-            coverImage,
-            lyrics,
-            lyricsLines: lyrics ? parseLyrics(lyrics) : []
-          });
-          
-          // 如果没有内嵌歌词，尝试联网搜索
-          if (!lyrics && title) {
-            setIsSearchingLyrics(true);
-            void searchLyricsOnline(title, artist).then(externalLyrics => {
-              if (externalLyrics) {
-                setMetadata(prev => ({
-                  ...prev,
-                  lyrics: externalLyrics,
-                  lyricsLines: parseLyrics(externalLyrics)
-                }));
-              }
-            }).catch(() => {}).finally(() => {
-              setIsSearchingLyrics(false);
-            });
-          }
-        } catch (e) {
-          setMetadata({ 
-            title: title || '', 
-            artist: artist || '', 
-            album: album || '', 
-            coverImage,
-            lyrics,
-            lyricsLines: lyrics ? parseLyrics(lyrics) : []
-          });
-          
-          // 如果没有内嵌歌词，尝试联网搜索
-          if (!lyrics && title) {
-            setIsSearchingLyrics(true);
-            void searchLyricsOnline(title, artist).then(externalLyrics => {
-              if (externalLyrics) {
-                setMetadata(prev => ({
-                  ...prev,
-                  lyrics: externalLyrics,
-                  lyricsLines: parseLyrics(externalLyrics)
-                }));
-              }
-            }).catch(() => {}).finally(() => {
-              setIsSearchingLyrics(false);
-            });
-          }
-        }
-      } else {
-        setMetadata({ 
-          title: title || '', 
-          artist: artist || '', 
-          album: album || '', 
-          coverImage,
-          lyrics 
-        });
-      }
-    } catch (error) {
-      setMetadata({
-        title: fileNameRef.current.replace(/\.[^/.]+$/, ''),
-        artist: '未知艺术家',
-        album: '未知专辑',
-        coverImage: undefined,
-        lyrics: '',
-        lyricsLines: []
-      });
-    }
-  };
+  }, [extractMetadata, isDragging]);
 
   useEffect(() => {
     return () => {
@@ -452,13 +558,11 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
         onErrorRef.current?.('播放失败: ' + err.message);
       });
     }
-  }, [onError]);
+  }, []);
 
   const handleVolumeUp = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-
-    
     const newVolume = Math.min(1, audio.volume + 0.1);
     audio.volume = newVolume;
     if (audio.muted && newVolume > 0) {
@@ -469,64 +573,76 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   const handleVolumeDown = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    
-    const newVolume = Math.max(0, audio.volume - 0.1);
-    audio.volume = newVolume;
+    audio.volume = Math.max(0, audio.volume - 0.1);
   }, []);
 
   const handleSeekForward = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    
     audio.currentTime = Math.min(audio.duration, audio.currentTime + 10);
   }, []);
 
   const handleSeekBackward = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    
     audio.currentTime = Math.max(0, audio.currentTime - 10);
   }, []);
 
   const handleMute = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    
     audio.muted = !audio.muted;
   }, []);
 
   const handleSeek = useCallback((time: number) => {
     const audio = audioRef.current;
     if (!audio) return;
-    
-    const clamped = Math.max(0, Math.min(audio.duration || 0, time));
-    audio.currentTime = clamped;
-    // 立即同步状态，提升进度条响应
-    onStateChange({ currentTime: clamped });
+    audio.currentTime = Math.max(0, Math.min(audio.duration || 0, time));
   }, []);
 
-  // 手动搜索歌词
   const handleSearchLyrics = useCallback(async () => {
-    if (!metadata.title || isSearchingLyrics) return;
-    
+    if (isSearchingLyrics) return;
     setIsSearchingLyrics(true);
     try {
-      const externalLyrics = await searchLyricsOnline(metadata.title, metadata.artist || '');
-      if (externalLyrics) {
-        setMetadata(prev => ({
-          ...prev,
-          lyrics: externalLyrics,
-          lyricsLines: parseLyrics(externalLyrics)
-        }));
+      const candidates = await searchLyricsCandidatesWithBackend(metadata.title || '', metadata.artist || '');
+      setLyricsCandidates(candidates);
+      if (candidates.length > 0) {
+        applyLyricsCandidate(candidates[0], 0);
       }
-    } catch (e) {
-      console.error('搜索歌词失败:', e);
+    } catch (error) {
+      window.console.error('[歌词搜索] 手动搜索失败:', error);
     } finally {
       setIsSearchingLyrics(false);
     }
-  }, [metadata.title, metadata.artist, isSearchingLyrics]);
+  }, [applyLyricsCandidate, isSearchingLyrics, metadata.artist, metadata.title, searchLyricsCandidatesWithBackend]);
 
-  // 暴露方法给父组件
+  const handleSwitchLyrics = useCallback(() => {
+    if (lyricsCandidates.length <= 1) return;
+    const nextIndex = (currentLyricsIndex + 1) % lyricsCandidates.length;
+    applyLyricsCandidate(lyricsCandidates[nextIndex], nextIndex);
+  }, [applyLyricsCandidate, currentLyricsIndex, lyricsCandidates]);
+
+  const handleSaveLyrics = useCallback(async () => {
+    if (isSavingLyrics || !metadata.lyrics?.trim() || !filePathRef.current) return;
+    setIsSavingLyrics(true);
+    try {
+      const savedPath = await invoke<string>('save_local_lyrics', {
+        audioPath: filePathRef.current,
+        lyrics: metadata.lyrics,
+      });
+
+      window.console.log('[歌词搜索] 本地歌词保存成功:', savedPath);
+      setMetadata(prev => ({
+        ...prev,
+        lyricsSource: '本地歌词',
+      }));
+    } catch (error) {
+      window.console.error('[歌词搜索] 保存本地歌词失败:', error);
+    } finally {
+      setIsSavingLyrics(false);
+    }
+  }, [isSavingLyrics, metadata.lyrics]);
+
   useEffect(() => {
     if (externalPlayPause) externalPlayPause.current = handlePlayPause;
     if (externalVolumeUp) externalVolumeUp.current = handleVolumeUp;
@@ -535,35 +651,27 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     if (externalSeekForward) externalSeekForward.current = handleSeekForward;
     if (externalSeekBackward) externalSeekBackward.current = handleSeekBackward;
     if (externalSeekTo) externalSeekTo.current = (time: number) => handleSeek(time);
-  }, [handlePlayPause, handleVolumeUp, handleVolumeDown, handleMute, handleSeekForward, handleSeekBackward, handleSeek]);
+  }, [externalMute, externalPlayPause, externalSeekBackward, externalSeekForward, externalSeekTo, externalVolumeDown, externalVolumeUp, handleMute, handlePlayPause, handleSeek, handleSeekBackward, handleSeekForward, handleVolumeDown, handleVolumeUp]);
 
   return (
     <div className="relative flex-1 flex w-full h-full border-5 border-gray-700"
          style={{ border: '5px solid #374151' }}
          onClick={handlePlayPause}>
-      {/* 隐藏的音频元素 */}
       <audio
         ref={audioRef}
         src={src}
         preload="metadata"
         style={{ display: 'none' }}
       />
-      
-      {/* 左侧：唱片播放机区域 - 38% 宽度 */}
+
       <div className="h-full flex flex-col" style={{ width: '38%' }}>
-        {/* 唱片机按钮区域 - 动态尺寸 */}
-        <VinylPlayerButtons 
-          middleButtonRef={middleButtonRef}
-        />
-        
-        {/* 唱片区域：底对齐 */}
+        <VinylPlayerButtons middleButtonRef={middleButtonRef} />
         <div className="flex-1 flex items-end justify-center" style={{ paddingBottom: '10px' }}>
-          <VinylPlayer 
+          <VinylPlayer
             isPlaying={playerState.isPlaying}
             coverImage={metadata.coverImage}
             buttonElement={middleButtonRef.current}
           />
-          {/* 调试信息：显示封面图像状态 */}
           {process.env.NODE_ENV === 'development' && (
             <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 text-white text-xs p-1 rounded">
               Cover: {metadata.coverImage ? 'Yes' : 'No'}
@@ -572,27 +680,29 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
           )}
         </div>
       </div>
-      
-      {/* 右侧：音频信息和音波条区域 - 61% 宽度 */}
+
       <div className="h-full flex flex-col" style={{ width: '61%' }}>
-        {/* 上部：音频信息区域 - 61% 高度（底部安全区10px） */}
         <div style={{ height: '61%', paddingBottom: '10px' }}>
           <AudioInfo
             fileName={fileName}
             metadata={metadata}
             currentTime={playerState.currentTime}
             onSearchLyrics={handleSearchLyrics}
+            onSwitchLyrics={handleSwitchLyrics}
+            onSaveLyrics={handleSaveLyrics}
             isSearchingLyrics={isSearchingLyrics}
+            isSavingLyrics={isSavingLyrics}
+            hasLyricsCandidates={lyricsCandidates.length > 1}
+            currentLyricsIndex={currentLyricsIndex}
+            lyricsCandidateCount={lyricsCandidates.length}
           />
         </div>
-        
-        {/* 下部：音波条区域 - 38% 高度（底部内边距0） */}
         <div style={{ height: '38%', paddingBottom: '0px' }}>
-            <AudioVisualizer
-             audioElement={audioRef.current}
-             isPlaying={playerState.isPlaying}
-             height={0 /* 让组件自适应容器高度 */}
-           />
+          <AudioVisualizer
+            audioElement={audioRef.current}
+            isPlaying={playerState.isPlaying}
+            height={0}
+          />
         </div>
       </div>
     </div>

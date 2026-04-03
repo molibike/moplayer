@@ -2,10 +2,105 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::{command, Manager, State};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tauri::{command, Manager, State};
+
+fn normalize_search_text(input: &str) -> String {
+    input
+        .to_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .filter(|ch| {
+            !matches!(
+                ch,
+                '-'
+                    | '_'
+                    | '·'
+                    | '/'
+                    | '\\'
+                    | '|'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '【'
+                    | '】'
+                    | '（'
+                    | '）'
+                    | ','
+                    | '，'
+                    | '.'
+                    | '。'
+                    | ':'
+                    | '：'
+                    | '!'
+                    | '！'
+                    | '?'
+                    | '？'
+                    | '\''
+                    | '"'
+            )
+        })
+        .collect()
+}
+
+fn song_match_score(song: &serde_json::Value, title: &str, artist: &str) -> i32 {
+    let normalized_title = normalize_search_text(title);
+    let normalized_artist = normalize_search_text(artist);
+
+    let song_name = song
+        .get("name")
+        .or_else(|| song.get("title"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let normalized_song_name = normalize_search_text(song_name);
+
+    let artist_names = if let Some(artist_name) = song.get("artist").and_then(|v| v.as_str()) {
+        artist_name.to_string()
+    } else if let Some(artists) = song.get("artists").and_then(|v| v.as_array()) {
+        artists
+            .iter()
+            .filter_map(|artist_item| artist_item.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else if let Some(artists) = song.get("ar").and_then(|v| v.as_array()) {
+        artists
+            .iter()
+            .filter_map(|artist_item| artist_item.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        String::new()
+    };
+
+    let normalized_song_artist = normalize_search_text(&artist_names);
+
+    let mut score = 0;
+
+    if !normalized_title.is_empty() {
+        if normalized_song_name == normalized_title {
+            score += 100;
+        } else if normalized_song_name.contains(&normalized_title)
+            || normalized_title.contains(&normalized_song_name)
+        {
+            score += 60;
+        }
+    }
+
+    if !normalized_artist.is_empty() {
+        if normalized_song_artist == normalized_artist {
+            score += 80;
+        } else if normalized_song_artist.contains(&normalized_artist)
+            || normalized_artist.contains(&normalized_song_artist)
+        {
+            score += 40;
+        }
+    }
+
+    score
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatus {
@@ -13,6 +108,14 @@ pub struct PlayerStatus {
     pub current_time: f64,
     pub duration: f64,
     pub volume: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LyricsCandidate {
+    source: String,
+    title: String,
+    artist: String,
+    lyrics: String,
 }
 
 impl Default for PlayerStatus {
@@ -38,31 +141,26 @@ fn get_player_status() -> PlayerStatus {
 
 #[command]
 fn seek_to(time: f64) -> Result<(), String> {
-    // TODO: 实现播放器定位功能
     println!("Seeking to time: {}", time);
     Ok(())
 }
 
 #[command]
 fn list_images_in_dir(file_path: String) -> Vec<String> {
-    use std::path::Path;
     use std::fs;
-    
+    use std::path::Path;
+
     println!("list_images_in_dir called with: {}", file_path);
-    
+
     let path = Path::new(&file_path);
     if let Some(parent) = path.parent() {
         println!("Parent directory: {:?}", parent);
-        
+
         let mut images = vec![];
-        // 仅图片类扩展（不包含 PDF）
         let exts = [
-            "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico",
-            "tif", "tiff", "heic", "heif",
-            "raw", "cr2", "nef", "arw", "dng", "rw2", "orf", "raf", "sr2",
-            "wmf"
+            "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico", "tif", "tiff", "heic", "heif", "raw", "cr2", "nef", "arw", "dng", "rw2", "orf", "raf", "sr2", "wmf",
         ];
-        
+
         if let Ok(entries) = fs::read_dir(parent) {
             for entry in entries.flatten() {
                 let p = entry.path();
@@ -78,8 +176,7 @@ fn list_images_in_dir(file_path: String) -> Vec<String> {
                 }
             }
         }
-        
-        // 排序保证一致
+
         images.sort();
         println!("Returning {} images", images.len());
         images
@@ -91,8 +188,8 @@ fn list_images_in_dir(file_path: String) -> Vec<String> {
 
 #[command]
 fn list_pdfs_in_dir(file_path: String) -> Vec<String> {
-    use std::path::Path;
     use std::fs;
+    use std::path::Path;
 
     println!("list_pdfs_in_dir called with: {}", file_path);
 
@@ -113,6 +210,7 @@ fn list_pdfs_in_dir(file_path: String) -> Vec<String> {
                 }
             }
         }
+
         pdfs.sort();
         println!("Returning {} pdfs", pdfs.len());
         pdfs
@@ -125,59 +223,698 @@ fn list_pdfs_in_dir(file_path: String) -> Vec<String> {
 #[command]
 async fn set_window_size(app_handle: tauri::AppHandle, width: u32, height: u32) -> Result<(), String> {
     println!("Setting window size: {}x{}", width, height);
-    
+
     match app_handle.get_webview_window("main") {
         Some(window) => {
-            window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
+            window
+                .set_size(tauri::Size::Physical(tauri::PhysicalSize { width, height }))
                 .map_err(|e| format!("Failed to set window size: {}", e))?;
             Ok(())
-        },
-        None => Err("Main window not found".to_string())
+        }
+        None => Err("Main window not found".to_string()),
     }
 }
 
 #[command]
 async fn get_screen_size(app_handle: tauri::AppHandle) -> Result<(u32, u32), String> {
-    // 优先通过主窗口获取主显示器尺寸
     if let Some(window) = app_handle.get_webview_window("main") {
         match window.primary_monitor() {
             Ok(Some(monitor)) => {
                 let size = monitor.size();
                 return Ok((size.width, size.height));
             }
-            Ok(None) => {
-                // 未找到主显示器，继续回退
-            }
-            Err(e) => {
-                eprintln!("获取主显示器失败: {}", e);
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("获取主显示器失败: {}", error);
             }
         }
     }
-    // 回退：返回默认分辨率
+
     Ok((1920, 1080))
 }
 
 #[command]
 fn open_file(file_path: String) -> Result<(), String> {
-    println!("Opening file: {}", file_path);
-    // 这里可以添加文件打开逻辑
+    println!("[FILE] ==========================================");
+    println!("[FILE] 打开文件: {}", file_path);
+    println!("[FILE] ==========================================");
     Ok(())
+}
+
+#[command]
+async fn http_get(url: String) -> Result<String, String> {
+    println!("[HTTP] ==========================================");
+    println!("[HTTP] 请求URL: {}", url);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("创建客户端失败: {}", e))?;
+
+    println!("[HTTP] 发送请求...");
+    let response = client
+        .get(&url)
+        .header("User-Agent", "MoPlayer/1.0")
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    let status = response.status();
+    println!("[HTTP] 收到响应，状态码: {}", status);
+
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("读取响应体失败: {}", e))?;
+
+    let preview = if body.len() > 150 { &body[..150] } else { &body };
+    println!("[HTTP] 响应内容: {}", preview.replace('\n', " "));
+    println!("[HTTP] 响应长度: {} 字节", body.len());
+    println!("[HTTP] ==========================================");
+
+    if status.is_success() {
+        Ok(body)
+    } else {
+        Err(format!("HTTP {}: {}", status, body))
+    }
+}
+
+fn is_valid_lyrics_text(text: &str) -> bool {
+    let value = text.trim();
+    !value.is_empty() && !value.contains("纯音乐")
+}
+
+fn extract_search_result_songs<'a>(search_json: &'a serde_json::Value) -> Vec<&'a serde_json::Value> {
+    if let Some(songs) = search_json.get("data").and_then(|v| v.as_array()) {
+        return songs.iter().collect();
+    }
+
+    if let Some(songs) = search_json
+        .get("result")
+        .and_then(|result| result.get("songs"))
+        .and_then(|songs| songs.as_array())
+    {
+        return songs.iter().collect();
+    }
+
+    if let Some(songs) = search_json.as_array() {
+        return songs.iter().collect();
+    }
+
+    Vec::new()
+}
+
+fn extract_song_id(song: &serde_json::Value) -> Option<String> {
+    song.get("id").and_then(|id| {
+        id.as_i64()
+            .map(|value| value.to_string())
+            .or_else(|| id.as_str().map(|value| value.to_string()))
+    })
+}
+
+fn extract_song_name(song: &serde_json::Value) -> String {
+    song.get("name")
+        .or_else(|| song.get("title"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn extract_song_artist(song: &serde_json::Value) -> String {
+    if let Some(artist_name) = song.get("artist").and_then(|v| v.as_str()) {
+        return artist_name.to_string();
+    }
+
+    if let Some(artists) = song.get("artists").and_then(|v| v.as_array()) {
+        return artists
+            .iter()
+            .filter_map(|artist_item| artist_item.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<_>>()
+            .join(" / ");
+    }
+
+    if let Some(artists) = song.get("ar").and_then(|v| v.as_array()) {
+        return artists
+            .iter()
+            .filter_map(|artist_item| artist_item.get("name").and_then(|v| v.as_str()))
+            .collect::<Vec<_>>()
+            .join(" / ");
+    }
+
+    String::new()
+}
+
+fn format_lyrics_text(raw: &str) -> String {
+    raw.lines()
+        .filter(|line| {
+            !line.trim_start().starts_with("[ti:")
+                && !line.trim_start().starts_with("[ar:")
+                && !line.trim_start().starts_with("[al:")
+                && !line.trim_start().starts_with("[by:")
+                && !line.trim_start().starts_with("[offset:")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+fn lyrics_has_timestamps(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with('[')
+            && trimmed.len() >= 6
+            && trimmed
+                .chars()
+                .nth(1)
+                .map(|ch| ch.is_ascii_digit())
+                .unwrap_or(false)
+    })
+}
+
+fn lyrics_quality_score(candidate: &LyricsCandidate, title: &str, artist: &str) -> i32 {
+    let normalized_candidate_title = normalize_search_text(&candidate.title);
+    let normalized_candidate_artist = normalize_search_text(&candidate.artist);
+    let normalized_title = normalize_search_text(title);
+    let normalized_artist = normalize_search_text(artist);
+
+    let mut score = 0;
+
+    if !normalized_title.is_empty() {
+        if normalized_candidate_title == normalized_title {
+            score += 120;
+        } else if normalized_candidate_title.contains(&normalized_title)
+            || normalized_title.contains(&normalized_candidate_title)
+        {
+            score += 70;
+        }
+    }
+
+    if !normalized_artist.is_empty() && !normalized_candidate_artist.is_empty() {
+        if normalized_candidate_artist == normalized_artist {
+            score += 90;
+        } else if normalized_candidate_artist.contains(&normalized_artist)
+            || normalized_artist.contains(&normalized_candidate_artist)
+        {
+            score += 45;
+        }
+    }
+
+    if lyrics_has_timestamps(&candidate.lyrics) {
+        score += 80;
+    }
+
+    let line_count = candidate
+        .lyrics
+        .lines()
+        .filter(|line| !line.is_empty())
+        .count() as i32;
+    score += line_count.min(40);
+
+    match candidate.source.as_str() {
+        "netease" => score += 18,
+        "lrclib" => score += 12,
+        "tencent" => score += 10,
+        "lrc_cx" => score += 6,
+        _ => {}
+    }
+
+    score
+}
+
+async fn search_lyrics_from_lrclib(
+    client: &reqwest::Client,
+    title: &str,
+    artist: &str,
+) -> Result<Option<String>, String> {
+    let query = if artist.trim().is_empty() || artist == "未知艺术家" {
+        title.trim().to_string()
+    } else {
+        format!("{} {}", title.trim(), artist.trim())
+    };
+
+    let url = format!("https://lrclib.net/api/search?q={}", urlencoding::encode(&query));
+    println!("[歌词搜索] 尝试lrclib，URL: {}", url);
+
+    let body = client
+        .get(&url)
+        .header("User-Agent", "MoPlayer/1.0")
+        .send()
+        .await
+        .map_err(|e| format!("lrclib请求失败: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("读取lrclib响应失败: {}", e))?;
+
+    let items: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("解析lrclib响应失败: {}", e))?;
+
+    if let Some(array) = items.as_array() {
+        for item in array {
+            let synced = item
+                .get("syncedLyrics")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let plain = item
+                .get("plainLyrics")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let raw = if !synced.trim().is_empty() { synced } else { plain };
+            let formatted = format_lyrics_text(raw);
+            if is_valid_lyrics_text(&formatted) {
+                return Ok(Some(formatted));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+async fn search_lyrics_from_tencent(
+    client: &reqwest::Client,
+    title: &str,
+    artist: &str,
+) -> Result<Option<String>, String> {
+    let keywords = if artist.trim().is_empty() || artist == "未知艺术家" {
+        title.trim().to_string()
+    } else {
+        format!("{} {}", title.trim(), artist.trim())
+    };
+
+    let search_url = format!(
+        "https://meting-api.vercel.app/api/search?server=tencent&type=song&format=json&keyword={}",
+        urlencoding::encode(&keywords)
+    );
+    println!("[歌词搜索] 尝试QQ音乐搜索，URL: {}", search_url);
+
+    let search_body = client
+        .get(&search_url)
+        .header("User-Agent", "MoPlayer/1.0")
+        .send()
+        .await
+        .map_err(|e| format!("QQ音乐搜索请求失败: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("读取QQ音乐搜索响应失败: {}", e))?;
+
+    let search_json: serde_json::Value = serde_json::from_str(&search_body)
+        .map_err(|e| format!("解析QQ音乐搜索响应失败: {}", e))?;
+    let songs = extract_search_result_songs(&search_json);
+    let mut ranked_songs = songs
+        .into_iter()
+        .map(|song| (song_match_score(song, title, artist), song))
+        .collect::<Vec<_>>();
+    ranked_songs.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (_score, song) in ranked_songs {
+        let Some(song_id) = extract_song_id(song) else {
+            continue;
+        };
+
+        let lrc_url = format!(
+            "https://meting-api.vercel.app/api?server=tencent&type=lrc&id={}",
+            urlencoding::encode(&song_id)
+        );
+        println!("[歌词搜索] 尝试QQ歌词，URL: {}", lrc_url);
+
+        let lrc_body = client
+            .get(&lrc_url)
+            .header("User-Agent", "MoPlayer/1.0")
+            .send()
+            .await
+            .map_err(|e| format!("QQ歌词请求失败: {}", e))?
+            .text()
+            .await
+            .map_err(|e| format!("读取QQ歌词响应失败: {}", e))?;
+
+        let formatted = format_lyrics_text(&lrc_body);
+        if is_valid_lyrics_text(&formatted) {
+            println!(
+                "[歌词搜索] 命中QQ歌词候选: title={}, artist={}",
+                extract_song_name(song),
+                extract_song_artist(song)
+            );
+            return Ok(Some(formatted));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn search_lyrics_from_lrc_cx(
+    client: &reqwest::Client,
+    title: &str,
+) -> Result<Option<String>, String> {
+    let url = format!("https://api.lrc.cx/api/search?q={}", urlencoding::encode(title.trim()));
+    println!("[歌词搜索] 尝试api.lrc.cx，URL: {}", url);
+
+    let body = client
+        .get(&url)
+        .header("User-Agent", "MoPlayer/1.0")
+        .send()
+        .await
+        .map_err(|e| format!("api.lrc.cx请求失败: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("读取api.lrc.cx响应失败: {}", e))?;
+
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("解析api.lrc.cx响应失败: {}", e))?;
+
+    if let Some(items) = json.as_array() {
+        for item in items {
+            let raw = item
+                .get("lyric")
+                .or_else(|| item.get("lyrics"))
+                .or_else(|| item.get("lrc"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let formatted = format_lyrics_text(raw);
+            if is_valid_lyrics_text(&formatted) {
+                return Ok(Some(formatted));
+            }
+        }
+    }
+
+    if let Some(raw) = json
+        .get("lyric")
+        .or_else(|| json.get("lyrics"))
+        .or_else(|| json.get("lrc"))
+        .and_then(|v| v.as_str())
+    {
+        let formatted = format_lyrics_text(raw);
+        if is_valid_lyrics_text(&formatted) {
+            return Ok(Some(formatted));
+        }
+    }
+
+    println!("[歌词搜索] api.lrc.cx未找到有效歌词");
+    Ok(None)
+}
+
+async fn collect_lyrics_candidates(title: &str, artist: &str) -> Result<Vec<LyricsCandidate>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("创建客户端失败: {}", e))?;
+
+    let mut results: Vec<LyricsCandidate> = Vec::new();
+    let mut search_plans: Vec<(String, String)> = Vec::new();
+    if !artist.trim().is_empty() && artist != "未知艺术家" {
+        search_plans.push((format!("{} {}", title, artist), artist.to_string()));
+    }
+    search_plans.push((title.to_string(), String::new()));
+
+    for (index, (keywords, current_artist)) in search_plans.iter().enumerate() {
+        println!(
+            "[歌词搜索] 开始第{}轮搜索，关键词: {}，匹配艺术家: {}",
+            index + 1,
+            keywords,
+            current_artist
+        );
+
+        let search_url = format!(
+            "https://music.163.com/api/search/get/web?type=1&offset=0&total=true&limit=10&s={}",
+            urlencoding::encode(keywords)
+        );
+
+        println!("[歌词搜索] 搜索URL: {}", search_url);
+
+        let search_resp = client
+            .get(&search_url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .header("Referer", "https://music.163.com")
+            .send()
+            .await
+            .map_err(|e| format!("搜索请求失败: {}", e))?;
+
+        let search_body = search_resp
+            .text()
+            .await
+            .map_err(|e| format!("读取搜索响应失败: {}", e))?;
+
+        println!("[歌词搜索] 搜索响应长度: {} 字节", search_body.len());
+
+        let search_json: serde_json::Value = serde_json::from_str(&search_body)
+            .map_err(|e| format!("解析搜索响应失败: {}", e))?;
+
+        let songs = match search_json
+            .get("result")
+            .and_then(|result| result.get("songs"))
+            .and_then(|songs| songs.as_array())
+        {
+            Some(songs) if !songs.is_empty() => songs,
+            _ => {
+                println!("[歌词搜索] 第{}轮未找到歌曲，继续下一轮", index + 1);
+                continue;
+            }
+        };
+
+        let mut candidates: Vec<(i32, i64, String, String)> = songs
+            .iter()
+            .filter_map(|song| {
+                let song_id = song
+                    .get("id")
+                    .and_then(|id| id.as_i64())
+                    .or_else(|| {
+                        song.get("id")
+                            .and_then(|id| id.as_str())
+                            .and_then(|value| value.parse::<i64>().ok())
+                    })?;
+
+                let song_name = song
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+
+                let artist_name = song
+                    .get("artists")
+                    .and_then(|v| v.as_array())
+                    .map(|artists| {
+                        artists
+                            .iter()
+                            .filter_map(|artist_item| artist_item.get("name").and_then(|v| v.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    })
+                    .unwrap_or_default();
+
+                Some((
+                    song_match_score(song, title, current_artist),
+                    song_id,
+                    song_name,
+                    artist_name,
+                ))
+            })
+            .collect();
+
+        candidates.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (score, song_id, song_name, artist_name) in candidates {
+            println!(
+                "[歌词搜索] 尝试候选歌曲: id={}, score={}, title={}, artist={}",
+                song_id, score, song_name, artist_name
+            );
+
+            let lrc_url = format!(
+                "https://api.injahow.cn/meting/?type=lrc&id={}&server=netease",
+                song_id
+            );
+            println!("[歌词搜索] 歌词URL: {}", lrc_url);
+
+            let lrc_resp = match client
+                .get(&lrc_url)
+                .header("User-Agent", "MoPlayer/1.0")
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    println!("[歌词搜索] 歌词请求失败，继续下一个候选: {}", error);
+                    continue;
+                }
+            };
+
+            let lrc_body = match lrc_resp.text().await {
+                Ok(body) => body,
+                Err(error) => {
+                    println!("[歌词搜索] 读取歌词响应失败，继续下一个候选: {}", error);
+                    continue;
+                }
+            };
+
+            println!("[歌词搜索] 歌词响应长度: {} 字节", lrc_body.len());
+
+            if !is_valid_lyrics_text(&lrc_body) {
+                println!("[歌词搜索] 当前候选歌词无效，继续下一个候选");
+                continue;
+            }
+
+            if !results.iter().any(|item| item.lyrics == lrc_body) {
+                results.push(LyricsCandidate {
+                    source: "netease".to_string(),
+                    title: song_name,
+                    artist: artist_name,
+                    lyrics: lrc_body,
+                });
+            }
+        }
+    }
+
+    let mut lrclib_plans: Vec<String> = Vec::new();
+    if !artist.trim().is_empty() && artist != "未知艺术家" {
+        lrclib_plans.push(artist.to_string());
+    }
+    lrclib_plans.push(String::new());
+
+    for current_artist in lrclib_plans {
+        match search_lyrics_from_lrclib(&client, title, &current_artist).await {
+            Ok(Some(lyrics)) => {
+                if !results.iter().any(|item| item.lyrics == lyrics) {
+                    results.push(LyricsCandidate {
+                        source: "lrclib".to_string(),
+                        title: title.to_string(),
+                        artist: if current_artist.is_empty() {
+                            artist.to_string()
+                        } else {
+                            current_artist.clone()
+                        },
+                        lyrics,
+                    });
+                }
+            }
+            Ok(None) => {}
+            Err(error) => println!("[歌词搜索] lrclib搜索失败: {}", error),
+        }
+    }
+
+    match search_lyrics_from_tencent(&client, title, artist).await {
+        Ok(Some(lyrics)) => {
+            if !results.iter().any(|item| item.lyrics == lyrics) {
+                results.push(LyricsCandidate {
+                    source: "tencent".to_string(),
+                    title: title.to_string(),
+                    artist: artist.to_string(),
+                    lyrics,
+                });
+            }
+        }
+        Ok(None) => {}
+        Err(error) => println!("[歌词搜索] QQ音乐搜索失败: {}", error),
+    }
+
+    match search_lyrics_from_lrc_cx(&client, title).await {
+        Ok(Some(lyrics)) => {
+            if !results.iter().any(|item| item.lyrics == lyrics) {
+                results.push(LyricsCandidate {
+                    source: "lrc_cx".to_string(),
+                    title: title.to_string(),
+                    artist: artist.to_string(),
+                    lyrics,
+                });
+            }
+        }
+        Ok(None) => {}
+        Err(error) => println!("[歌词搜索] api.lrc.cx搜索失败: {}", error),
+    }
+
+    results.sort_by(|a, b| {
+        let score_a = lyrics_quality_score(a, title, artist);
+        let score_b = lyrics_quality_score(b, title, artist);
+        score_b.cmp(&score_a)
+    });
+
+    for candidate in &results {
+        println!(
+            "[歌词搜索] 候选排序结果: source={}, score={}, title={}, artist={}",
+            candidate.source,
+            lyrics_quality_score(candidate, title, artist),
+            candidate.title,
+            candidate.artist
+        );
+    }
+
+    Ok(results)
+}
+
+#[command]
+async fn search_lyrics_candidates(title: String, artist: String) -> Result<Vec<LyricsCandidate>, String> {
+    println!("[歌词搜索] 开始收集歌词候选 - 标题: {}, 艺术家: {}", title, artist);
+    collect_lyrics_candidates(&title, &artist).await
+}
+
+#[command]
+async fn search_lyrics(title: String, artist: String) -> Result<Option<String>, String> {
+    println!("[歌词搜索] 开始搜索 - 标题: {}, 艺术家: {}", title, artist);
+
+    let candidates = collect_lyrics_candidates(&title, &artist).await?;
+    if let Some(first) = candidates.into_iter().next() {
+        println!("[歌词搜索] 成功获取歌词，来源: {}", first.source);
+        Ok(Some(first.lyrics))
+    } else {
+        println!("[歌词搜索] 所有搜索轮次均未获取到有效歌词");
+        Ok(None)
+    }
+}
+
+#[command]
+fn load_local_lyrics(audio_path: String) -> Result<Option<String>, String> {
+    let path = PathBuf::from(&audio_path);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let lrc_path = path.with_extension("lrc");
+    if !lrc_path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&lrc_path)
+        .map_err(|e| format!("读取本地歌词失败: {}", e))?;
+    if content.trim().is_empty() {
+        return Ok(None);
+    }
+
+    println!("[歌词搜索] 命中本地歌词文件: {}", lrc_path.display());
+    Ok(Some(content))
+}
+
+#[command]
+fn save_local_lyrics(audio_path: String, lyrics: String) -> Result<String, String> {
+    if lyrics.trim().is_empty() {
+        return Err("歌词内容为空，无法保存".to_string());
+    }
+
+    let path = PathBuf::from(&audio_path);
+    let parent = path
+        .parent()
+        .ok_or_else(|| "音频文件路径无效，无法定位目录".to_string())?;
+    if !parent.exists() {
+        return Err("音频所在目录不存在，无法保存歌词".to_string());
+    }
+
+    let lrc_path = path.with_extension("lrc");
+    std::fs::write(&lrc_path, lyrics).map_err(|e| format!("保存本地歌词失败: {}", e))?;
+
+    let saved_path = lrc_path.to_string_lossy().to_string();
+    println!("[歌词搜索] 已保存本地歌词: {}", saved_path);
+    Ok(saved_path)
 }
 
 #[derive(Debug, Default)]
 struct StartupState {
-    file_path: Mutex<Option<String>>, // 保存启动时传入的文件路径
+    file_path: Mutex<Option<String>>,
 }
 
 #[command]
 fn get_startup_file(state: State<StartupState>) -> Option<String> {
-    // 读取并清空，避免重复打开
-    state.file_path.lock().ok().and_then(|mut p| p.take())
+    state.file_path.lock().ok().and_then(|mut path| path.take())
 }
 
 fn main() {
     env_logger::init();
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -191,27 +928,29 @@ fn main() {
             set_window_size,
             get_screen_size,
             open_file,
-            get_startup_file
+            get_startup_file,
+            http_get,
+            search_lyrics,
+            search_lyrics_candidates,
+            load_local_lyrics,
+            save_local_lyrics
         ])
         .setup(|app| {
-            // 处理命令行参数
             let args: Vec<String> = std::env::args().collect();
             println!("Command line arguments: {:?}", args);
-            
-            // 如果有文件路径参数，发送到前端
+
             if args.len() > 1 {
                 let file_path = &args[1];
                 if PathBuf::from(file_path).exists() {
                     println!("Opening file from command line: {}", file_path);
-                    // 保存启动路径，前端初始化完成后主动拉取
                     if let Some(state) = app.try_state::<StartupState>() {
-                        if let Ok(mut p) = state.file_path.lock() {
-                            *p = Some(file_path.to_string());
+                        if let Ok(mut path) = state.file_path.lock() {
+                            *path = Some(file_path.to_string());
                         }
                     }
                 }
             }
-            
+
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -177,6 +177,16 @@ input[type="range"]::-moz-range-thumb {
   overflow: hidden;
 }
 
+.auto-hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.auto-hide-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 /* 唱片旋转动画 - 使用CSS动画替代React state更新 */
 @keyframes spin {
   from {

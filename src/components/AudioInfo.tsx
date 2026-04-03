@@ -9,6 +9,7 @@ interface AudioMetadata {
   currentTime?: number;
   lyrics?: string;
   lyricsLines?: LyricLine[];
+  lyricsSource?: string;
 }
 
 interface AudioInfoProps {
@@ -16,7 +17,13 @@ interface AudioInfoProps {
   metadata?: AudioMetadata;
   currentTime: number;
   onSearchLyrics?: () => void;
+  onSwitchLyrics?: () => void;
+  onSaveLyrics?: () => void;
   isSearchingLyrics?: boolean;
+  isSavingLyrics?: boolean;
+  hasLyricsCandidates?: boolean;
+  currentLyricsIndex?: number;
+  lyricsCandidateCount?: number;
 }
 
 const AudioInfo: React.FC<AudioInfoProps> = ({ 
@@ -24,8 +31,15 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   metadata, 
   currentTime,
   onSearchLyrics,
-  isSearchingLyrics
+  onSwitchLyrics,
+  onSaveLyrics,
+  isSearchingLyrics,
+  isSavingLyrics,
+  hasLyricsCandidates,
+  currentLyricsIndex,
+  lyricsCandidateCount
 }) => {
+
   const [displayTitle, setDisplayTitle] = useState('');
   const [displayArtist, setDisplayArtist] = useState('');
   const [displayAlbum, setDisplayAlbum] = useState('');
@@ -38,6 +52,19 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
       ? metadata.lyricsLines 
       : [];
   }, [metadata?.lyricsLines]);
+
+  const plainLyricsLines = useMemo(() => {
+    if (!metadata?.lyrics?.trim()) return [];
+    if (lyricsWithTime.length > 0) return [];
+
+    return metadata.lyrics
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean);
+  }, [lyricsWithTime.length, metadata?.lyrics]);
+
+  const hasAnyLyrics = !!metadata?.lyrics?.trim();
+  const canSwitchLyrics = !!hasLyricsCandidates;
 
   // 计算当前应该高亮的歌词索引
   const currentLyricIndex = useMemo(() => {
@@ -75,9 +102,24 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
     }
   }, [currentLyricIndex]);
 
-  // 从文件名提取信息
+  // 从文件名提取信息（增强版）
   const extractInfoFromFileName = (fileName: string) => {
-    const nameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
+    // 移除扩展名
+    let nameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
+    
+    // 清理常见噪声
+    nameWithoutExt = nameWithoutExt
+      // 去除序号前缀："01. "、"01-"、"01_"、"01 "、"【01】"
+      .replace(/^[\d\s]+[\.\-_\s【】\[\]]+/, '')
+      // 去除音质标记
+      .replace(/\s*\[(HQ|FLAC|MP3|128K|320K|无损|高音质|超高音质|标准音质)\]\s*/gi, '')
+      .replace(/\s*\((HQ|FLAC|MP3|128K|320K|无损|高音质|超高音质|标准音质)\)\s*/gi, '')
+      // 去除其他常见后缀
+      .replace(/\s*-(\s*copy)?\s*$/i, '')
+      .replace(/\s*-\s*副本\s*$/i, '')
+      .trim();
+
+    // 尝试 "艺术家 - 歌名" 格式
     const parts = nameWithoutExt.split(' - ');
     if (parts.length >= 2) {
       return {
@@ -85,6 +127,17 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
         title: parts.slice(1).join(' - ').trim()
       };
     }
+
+    // 尝试 "歌名 - 艺术家" 格式
+    const reverseParts = nameWithoutExt.split('-');
+    if (reverseParts.length === 2) {
+      return {
+        artist: reverseParts[1].trim(),
+        title: reverseParts[0].trim()
+      };
+    }
+
+    // 默认：整个文件名作为歌名
     return {
       title: nameWithoutExt,
       artist: '未知艺术家'
@@ -113,7 +166,6 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
     }
   }, [fileName, metadata]);
 
-  // 点击歌词行跳转到对应时间
   const handleLyricClick = (timeMs: number) => {
     // 预留跳转接口
     console.log('Seek to:', timeMs / 1000);
@@ -124,7 +176,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   return (
     <div className="flex flex-col h-full p-6 bg-gradient-to-br from-gray-900 to-gray-800 text-white">
       {/* 音频信息与歌词统一滚动区域 */}
-      <div ref={contentScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden">
+      <div ref={contentScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden auto-hide-scrollbar">
         <div className="flex flex-col items-center text-center" style={{ paddingTop: '0.25rem', paddingBottom: '3rem' }}>
           {/* 歌曲标题 */}
           <div
@@ -163,12 +215,40 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
             </p>
           </div>
 
-          {/* 歌词直接拼接在信息下方，同区滚动 */}
+          {/* 歌词操作区 */}
+          {hasAnyLyrics ? (
+            <div className="w-full flex flex-wrap items-center justify-center gap-3" style={{ marginTop: headerCollapsed ? '0.75rem' : '1.25rem' }}>
+              <button
+                onClick={onSwitchLyrics}
+                disabled={!canSwitchLyrics}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white rounded-lg transition-colors duration-200"
+                style={{ fontSize: 'clamp(0.82rem, 1.8vw, 0.95rem)' }}
+                title={canSwitchLyrics ? '切换到下一份候选歌词' : '当前没有更多候选歌词'}
+              >
+                换一份歌词 {typeof currentLyricsIndex === 'number' && typeof lyricsCandidateCount === 'number' && lyricsCandidateCount > 0 ? `(${currentLyricsIndex + 1}/${lyricsCandidateCount})` : ''}
+              </button>
+              <button
+                onClick={onSaveLyrics}
+                disabled={isSavingLyrics}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 text-white rounded-lg transition-colors duration-200"
+                style={{ fontSize: 'clamp(0.82rem, 1.8vw, 0.95rem)' }}
+              >
+                {isSavingLyrics ? '保存中...' : '下载到本地'}
+              </button>
+              {metadata?.lyricsSource ? (
+                <span className="text-gray-400" style={{ fontSize: 'clamp(0.8rem, 1.6vw, 0.9rem)' }}>
+                  来源：{metadata.lyricsSource}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+
           {lyricsWithTime.length > 0 ? (
             <div className="w-full" style={{ maxWidth: '92%', marginTop: headerCollapsed ? '0.4rem' : '1.5rem', paddingBottom: '40vh' }}>
               {lyricsWithTime.map((line, index) => {
                 const isCurrent = index === currentLyricIndex;
                 const isPast = index < currentLyricIndex;
+
                 // 简约：只保留基础透明度层次
                 const lineOpacity = isCurrent ? 1 : isPast ? 0.55 : 0.75;
 
@@ -196,6 +276,24 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                   </p>
                 );
               })}
+            </div>
+          ) : plainLyricsLines.length > 0 ? (
+            <div className="w-full" style={{ maxWidth: '92%', marginTop: headerCollapsed ? '0.4rem' : '1.5rem', paddingBottom: '40vh' }}>
+              {plainLyricsLines.map((line, index) => (
+                <p
+                  key={`plain-lyric-${index}`}
+                  className="text-gray-300"
+                  style={{
+                    fontSize: 'clamp(0.98rem, 2.1vw, 1.15rem)',
+                    lineHeight: 1.8,
+                    marginTop: index === 0 ? '0' : '0.28rem',
+                    opacity: 0.92,
+                    filter: 'none'
+                  }}
+                >
+                  {line}
+                </p>
+              ))}
             </div>
           ) : (
             /* 无歌词时显示搜索按钮 */

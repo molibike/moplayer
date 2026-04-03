@@ -2,9 +2,16 @@
  * 歌词处理工具模块
  * 支持：
  * 1. 读取本地 .lrc 歌词文件
- * 2. 联网搜索歌词
+ * 2. 联网搜索歌词 (使用Rust后端绕过CORS)
  * 3. 解析 LRC 格式时间标签
  */
+
+import { invoke } from '@tauri-apps/api/core';
+
+// 自定义HTTP GET函数，通过Rust后端绕过CORS
+export async function httpGet(url: string): Promise<string> {
+  return await invoke('http_get', { url });
+}
 
 export interface LyricLine {
   time: number; // 毫秒
@@ -67,11 +74,8 @@ export async function loadLocalLyrics(audioPath: string): Promise<string | null>
     // 如果是 http/https URL，尝试直接获取
     if (lrcPath.startsWith('http://') || lrcPath.startsWith('https://')) {
       try {
-        const response = await fetch(lrcPath, { method: 'GET' });
-        if (response.ok) {
-          const text = await response.text();
-          if (text.trim()) return text;
-        }
+        const text = await httpGet(lrcPath);
+        if (text.trim()) return text;
       } catch {
         // 网络请求失败，继续尝试其他方式
       }
@@ -86,92 +90,138 @@ export async function loadLocalLyrics(audioPath: string): Promise<string | null>
 }
 
 /**
- * 联网搜索歌词 - 使用 Meting-API 多源搜索
- * 流程：1. 搜索歌曲获取ID  2. 用ID获取歌词
+ * 联网搜索歌词 - 使用多源搜索策略
+ * 依次尝试多个API源，直到找到歌词
  */
 export async function searchLyricsOnline(
   title: string,
   artist: string
 ): Promise<string | null> {
+  // 使用window.console确保不会被tree-shaking
+  window.console.log('[歌词搜索] ========== 开始搜索 ==========');
+  window.console.log('[歌词搜索] 参数:', { title, artist });
+  
+  if (!title || title.trim() === '') {
+    console.log('[歌词搜索] 标题为空，跳过搜索');
+    return null;
+  }
+
+  // 清理输入
+  const cleanTitle = title.trim();
+  const cleanArtist = artist && artist !== '未知艺术家' ? artist.trim() : '';
+  
   // 构建搜索关键词
-  const keywords = artist && artist !== '未知艺术家'
-    ? `${title} ${artist}`
-    : title;
+  const keywords = cleanArtist 
+    ? `${cleanTitle} ${cleanArtist}`
+    : cleanTitle;
+  
+  console.log('[歌词搜索] 搜索关键词:', keywords);
 
-  // 尝试网易云音乐源
-  const neteaseLyrics = await searchFromNetEase(keywords, title, artist);
-  if (neteaseLyrics) return neteaseLyrics;
+  // 1. 首先尝试 lrclib.net（无需两步搜索，直接返回歌词）
+  console.log('[歌词搜索] 尝试 lrclib.net...');
+  const lyrics = await searchFromLrcLib(title, artist);
+  if (lyrics) {
+    console.log('[歌词搜索] 使用lrclib结果');
+    return lyrics;
+  }
 
-  // 尝试QQ音乐源
-  const tencentLyrics = await searchFromTencent(keywords, title, artist);
-  if (tencentLyrics) return tencentLyrics;
+  // lrclib未找到，尝试其他API
+  console.log('[歌词搜索] lrclib未找到，尝试其他API...');
+  // 2. 尝试网易云音乐（Meting-API）
+  console.log('[歌词搜索] 尝试网易云音乐...');
+  const neteaseLyrics = await searchFromNetEase(keywords);
+  if (neteaseLyrics) {
+    console.log('[歌词搜索] 网易云音乐搜索成功');
+    return neteaseLyrics;
+  }
 
-  // 备用：尝试 lrclib
-  return searchFromLrcLib(title, artist);
+  // 3. 尝试QQ音乐（Meting-API）
+  console.log('[歌词搜索] 尝试QQ音乐...');
+  const tencentLyrics = await searchFromTencent(keywords, cleanTitle, cleanArtist);
+  if (tencentLyrics) {
+    console.log('[歌词搜索] QQ音乐搜索成功');
+    return tencentLyrics;
+  }
+
+  // 4. 最后尝试其他API
+  console.log('[歌词搜索] 尝试备用API...');
+  const fallbackLyrics = await searchFromFallbackAPIs(cleanTitle, cleanArtist);
+  if (fallbackLyrics) {
+    console.log('[歌词搜索] 备用API搜索成功');
+    return fallbackLyrics;
+  }
+
+  console.log('[歌词搜索] 所有源都未能找到歌词');
+  return null;
 }
 
 /**
  * 从网易云音乐搜索歌词
  */
 async function searchFromNetEase(
-  keywords: string,
-  title: string,
-  artist: string
+  keywords: string
 ): Promise<string | null> {
   try {
-    // Meting-API 公共实例列表（按可靠性排序）
-    const apiHosts = [
-      'https://meting-api.example.com',
-      'https://api.meting.com',
-      'https://meting-api.vercel.app',
-      'https://meting.ysnsn.cn',
-    ];
-
-    for (const apiHost of apiHosts) {
-      try {
-        // 1. 搜索歌曲
-        const searchUrl = `${apiHost}/search?keywords=${encodeURIComponent(keywords)}&server=netease`;
-        const searchRes = await fetch(searchUrl, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-        });
-
-        if (!searchRes.ok) continue;
-
-        const searchData = await searchRes.json();
-
-        // 找到最匹配的歌曲
-        const matchedSong = findBestMatch(searchData, title, artist);
-        if (!matchedSong || !matchedSong.id) continue;
-
-        // 2. 获取歌词
-        const lrcUrl = `${apiHost}/lrc?id=${matchedSong.id}&server=netease`;
-        const lrcRes = await fetch(lrcUrl, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-        });
-
-        if (!lrcRes.ok) continue;
-
-        const lrcData = await lrcRes.json();
-
-        if (lrcData.lyric || lrcData.lrc?.lyric) {
-          const rawLyrics = lrcData.lyric || lrcData.lrc?.lyric || '';
-          if (rawLyrics.trim()) {
-            return formatNeteaseLyrics(rawLyrics);
-          }
-        }
-
-        // 找到歌词就返回
-        return null;
-      } catch {
-        continue; // 当前API实例失败，尝试下一个
-      }
+    window.console.log('[歌词搜索-网易云] ====== 开始搜索流程 ======');
+    
+    // 使用网易云官方API搜索
+    const searchUrl = `https://music.163.com/api/search/get/web?type=1&offset=0&total=true&limit=5&s=${encodeURIComponent(keywords)}`;
+    window.console.log('[歌词搜索-网易云] 1. 准备搜索URL:', searchUrl);
+    
+    window.console.log('[歌词搜索-网易云] 2. 开始HTTP请求...');
+    const searchBody = await httpGet(searchUrl);
+    window.console.log('[歌词搜索-网易云] 3. HTTP请求完成，响应长度:', searchBody.length);
+    window.console.log('[歌词搜索-网易云] 4. 响应内容预览:', searchBody.substring(0, 300));
+    
+    window.console.log('[歌词搜索-网易云] 5. 开始解析JSON...');
+    const searchData = JSON.parse(searchBody);
+    window.console.log('[歌词搜索-网易云] 6. JSON解析完成');
+    window.console.log('[歌词搜索-网易云] 7. 解析后的数据结构:', Object.keys(searchData));
+    
+    if (!searchData.result) {
+      window.console.log('[歌词搜索-网易云] 8a. 无result字段');
+      return null;
     }
+    if (!searchData.result.songs) {
+      window.console.log('[歌词搜索-网易云] 8b. 无songs字段');
+      return null;
+    }
+    if (searchData.result.songs.length === 0) {
+      window.console.log('[歌词搜索-网易云] 8c. songs数组为空');
+      return null;
+    }
+    
+    window.console.log('[歌词搜索-网易云] 8. 找到歌曲数量:', searchData.result.songs.length);
+    
+    // 获取第一首歌的ID
+    const songId = searchData.result.songs[0].id;
+    window.console.log('[歌词搜索-网易云] 9. 第一首歌ID:', songId, '类型:', typeof songId);
+    
+    if (!songId) {
+      window.console.log('[歌词搜索-网易云] 10a. 歌曲ID为空，中断');
+      return null;
+    }
+    
+    // 使用Meting-API获取歌词
+    const lrcUrl = `https://api.injahow.cn/meting/?type=lrc&id=${songId}&server=netease`;
+    window.console.log('[歌词搜索-网易云] 10. 准备歌词URL:', lrcUrl);
+    
+    window.console.log('[歌词搜索-网易云] 11. 开始获取歌词...');
+    const lrcBody = await httpGet(lrcUrl);
+    window.console.log('[歌词搜索-网易云] 12. 歌词获取完成，长度:', lrcBody.length);
+    window.console.log('[歌词搜索-网易云] 13. 歌词内容预览:', lrcBody.substring(0, 200));
+    
+    if (lrcBody && lrcBody.trim() && !lrcBody.includes('纯音乐')) {
+      window.console.log('[歌词搜索-网易云] 14. 成功返回歌词');
+      return lrcBody;
+    }
+    
+    window.console.log('[歌词搜索-网易云] 14b. 歌词内容无效');
+    return null;
   } catch (error) {
-    console.error('网易云音乐搜索失败:', error);
+    window.console.error('[歌词搜索-网易云] 错误:', error);
+    return null;
   }
-  return null;
 }
 
 /**
@@ -184,37 +234,24 @@ async function searchFromTencent(
 ): Promise<string | null> {
   try {
     const apiHosts = [
-      'https://meting-api.example.com',
-      'https://api.meting.com',
       'https://meting-api.vercel.app',
     ];
 
     for (const apiHost of apiHosts) {
       try {
+        console.log(`[歌词搜索] 尝试QQ音乐API: ${apiHost}`);
+        
         // 1. 搜索歌曲
-        const searchUrl = `${apiHost}/search?keywords=${encodeURIComponent(keywords)}&server=tencent`;
-        const searchRes = await fetch(searchUrl, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-        });
-
-        if (!searchRes.ok) continue;
-
-        const searchData = await searchRes.json();
-
+        const searchUrl = `${apiHost}/api/search?keywords=${encodeURIComponent(keywords)}&server=tencent&limit=10`;
+        const searchBody = await httpGet(searchUrl);
+        const searchData = JSON.parse(searchBody);
         const matchedSong = findBestMatch(searchData, title, artist);
         if (!matchedSong || !matchedSong.id) continue;
 
         // 2. 获取歌词
-        const lrcUrl = `${apiHost}/lrc?id=${matchedSong.id}&server=tencent`;
-        const lrcRes = await fetch(lrcUrl, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-        });
-
-        if (!lrcRes.ok) continue;
-
-        const lrcData = await lrcRes.json();
+        const lrcUrl = `${apiHost}/api/lrc?id=${matchedSong.id}&server=tencent`;
+        const lrcBody = await httpGet(lrcUrl);
+        const lrcData = JSON.parse(lrcBody);
 
         if (lrcData.lyric || lrcData.lrc?.lyric) {
           const rawLyrics = lrcData.lyric || lrcData.lrc?.lyric || '';
@@ -222,56 +259,114 @@ async function searchFromTencent(
             return formatNeteaseLyrics(rawLyrics);
           }
         }
-
-        return null;
       } catch {
         continue;
       }
     }
   } catch (error) {
-    console.error('QQ音乐搜索失败:', error);
+    console.error('[歌词搜索] QQ音乐搜索失败:', error);
   }
   return null;
 }
 
 /**
  * 从 lrclib 搜索歌词（备用）
+ * lrclib.net 是一个开源歌词库，直接返回歌词内容
  */
 async function searchFromLrcLib(title: string, artist: string): Promise<string | null> {
   try {
     const encodedTitle = encodeURIComponent(title);
     const encodedArtist = encodeURIComponent(artist);
 
-    let url = `https://lrclib.net/api/search?q=${encodedTitle}`;
+    // lrclib 支持两种搜索方式：
+    // 1. 简单搜索: /api/search?q={title}
+    // 2. 精确搜索: /api/search?track_name={title}&artist_name={artist}
+    // 注意：lrclib的API可能已更新，先尝试最简单的形式
+    let url: string;
     if (artist && artist !== '未知艺术家') {
-      url = `https://lrclib.net/api/search?track_name=${encodedTitle}&artist_name=${encodedArtist}`;
+      // 尝试带artist的搜索
+      url = `https://lrclib.net/api/search?q=${encodedTitle} ${encodedArtist}`;
+    } else {
+      url = `https://lrclib.net/api/search?q=${encodedTitle}`;
     }
+    
+    console.log(`[歌词搜索] lrclib URL: ${url}`);
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-    });
-
-    if (!response.ok) return null;
-
-    const data = await response.json();
+    const response = await httpGet(url);
+    console.log(`[歌词搜索] lrclib结果:`, response);
+    
+    const data = JSON.parse(response);
 
     if (Array.isArray(data) && data.length > 0) {
+      // 优先返回带时间戳的歌词
       for (const item of data) {
-        if (item.syncedLyrics) {
+        if (item.syncedLyrics && item.syncedLyrics.trim()) {
+          console.log(`[歌词搜索] 找到同步歌词`);
           return item.syncedLyrics;
         }
-        if (item.plainLyrics) {
+      }
+      // 其次返回纯文本歌词
+      for (const item of data) {
+        if (item.plainLyrics && item.plainLyrics.trim()) {
+          console.log(`[歌词搜索] 找到纯文本歌词`);
           return item.plainLyrics;
         }
       }
     }
 
+    console.log(`[歌词搜索] lrclib未找到歌词`);
     return null;
   } catch (error) {
-    console.error('lrclib 搜索失败:', error);
+    console.error('[歌词搜索] lrclib搜索失败:', error);
     return null;
   }
+}
+
+/**
+ * 备用歌词API源
+ */
+async function searchFromFallbackAPIs(title: string, _artist: string): Promise<string | null> {
+  // 尝试其他可用的歌词API
+  
+  // 1. 尝试 api.lrc.cx (LRClib的镜像)
+  try {
+    console.log('[歌词搜索] 尝试 api.lrc.cx...');
+    const lrcCxUrl = `https://api.lrc.cx/api/search?q=${encodeURIComponent(title)}`;
+    const response = await httpGet(lrcCxUrl);
+    const data = JSON.parse(response);
+    if (Array.isArray(data) && data.length > 0) {
+      for (const item of data) {
+        if (item.syncedLyrics || item.plainLyrics) {
+          return item.syncedLyrics || item.plainLyrics;
+        }
+      }
+    }
+  } catch (e) {
+    console.log('[歌词搜索] api.lrc.cx 失败:', e);
+  }
+
+  // 2. 尝试其他Meting-API实例
+  const backupHosts: string[] = [];
+  
+  for (const host of backupHosts) {
+    try {
+      console.log(`[歌词搜索] 尝试备用API: ${host}`);
+      const url = `${host}/api/search?keywords=${encodeURIComponent(title)}&server=netease&limit=5`;
+      const body = await httpGet(url);
+      const data = JSON.parse(body);
+      if (data.data?.[0]?.id) {
+        const lrcRes = await httpGet(`${host}/api/lrc?id=${data.data[0].id}&server=netease`);
+        const lrcData = JSON.parse(lrcRes);
+        if (lrcData.lyric || lrcData.lrc?.lyric) {
+          return lrcData.lyric || lrcData.lrc?.lyric;
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  
+  return null;
 }
 
 /**

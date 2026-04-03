@@ -321,7 +321,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
       const clamped = Math.max(0, Math.min(video.duration || 0, time));
       video.currentTime = clamped;
     };
-  }, [handlePlayPause, handleVolumeUp, handleVolumeDown, handleMute, handleSeekForward, handleSeekBackward, isAudio]);
+  }, [handleMute, handlePlayPause, handleSeekBackward, handleSeekForward, handleVolumeDown, handleVolumeUp, isAudio, externalMute, externalPlayPause, externalSeekBackward, externalSeekForward, externalSeekTo, externalVolumeDown, externalVolumeUp]);
 
   // 如果是音频文件，使用音频播放界面
   if (isAudio) {
@@ -330,6 +330,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
         src={src}
         fileName={fileName || '未知文件'}
         fileBlob={fileBlob}
+        filePath={filePath}
         onStateChange={onStateChange}
         onError={onError}
         onEnded={onEnded}
