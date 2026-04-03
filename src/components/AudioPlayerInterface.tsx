@@ -54,6 +54,8 @@ interface AudioPlayerInterfaceProps {
   onEnded?: () => void;
 }
 
+type LyricsSearchStatus = 'idle' | 'searching' | 'success' | 'failed' | 'not_found';
+
 const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({ 
   src, 
   fileName,
@@ -89,11 +91,13 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   });
   const [isDragging] = useState(false);
   const [isSearchingLyrics, setIsSearchingLyrics] = useState(false);
+  const [lyricsSearchStatus, setLyricsSearchStatus] = useState<LyricsSearchStatus>('idle');
   const [isSavingLyrics, setIsSavingLyrics] = useState(false);
   const [lyricsCandidates, setLyricsCandidates] = useState<LyricsCandidate[]>([]);
   const [currentLyricsIndex, setCurrentLyricsIndex] = useState(0);
   const coverBlobUrlRef = useRef<string | null>(null);
   const metadataExtractedSrcRef = useRef<string>('');
+  const lyricsSearchStatusTimerRef = useRef<number | null>(null);
   const onStateChangeRef = useRef(onStateChange);
   const onErrorRef = useRef(onError);
   const onEndedRef = useRef(onEnded);
@@ -119,6 +123,15 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     fileBlobRef.current = fileBlob;
     filePathRef.current = filePath;
   }, [fileName, fileBlob, filePath]);
+
+  useEffect(() => {
+    return () => {
+      if (lyricsSearchStatusTimerRef.current) {
+        window.clearTimeout(lyricsSearchStatusTimerRef.current);
+        lyricsSearchStatusTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const isLikelySuspiciousArtist = useCallback((text: string): boolean => {
     const value = (text || '').trim();
@@ -588,39 +601,71 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     audio.currentTime = Math.max(0, audio.currentTime - 10);
   }, []);
 
-  const handleMute = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.muted = !audio.muted;
-  }, []);
-
   const handleSeek = useCallback((time: number) => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = Math.max(0, Math.min(audio.duration || 0, time));
   }, []);
 
-  const handleSearchLyrics = useCallback(async () => {
+  const handleMute = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.muted = !audio.muted;
+  }, []);
+
+  const handleSearchLyrics = useCallback(async (keyword?: string) => {
     if (isSearchingLyrics) return;
+
+    const searchTitle = (keyword || metadata.title || '').trim();
+    const searchArtist = keyword?.trim() ? '' : (metadata.artist || '');
+
+    if (!searchTitle) {
+      setLyricsSearchStatus('failed');
+      return;
+    }
+
     setIsSearchingLyrics(true);
+    setLyricsSearchStatus('searching');
     try {
-      const candidates = await searchLyricsCandidatesWithBackend(metadata.title || '', metadata.artist || '');
+      const candidates = await searchLyricsCandidatesWithBackend(searchTitle, searchArtist);
       setLyricsCandidates(candidates);
       if (candidates.length > 0) {
+        if (lyricsSearchStatusTimerRef.current) {
+          window.clearTimeout(lyricsSearchStatusTimerRef.current);
+        }
+        setLyricsSearchStatus('success');
         applyLyricsCandidate(candidates[0], 0);
+        lyricsSearchStatusTimerRef.current = window.setTimeout(() => {
+          setLyricsSearchStatus('idle');
+          lyricsSearchStatusTimerRef.current = null;
+        }, 1800);
+      } else {
+        setLyricsSearchStatus('not_found');
       }
     } catch (error) {
-      window.console.error('[歌词搜索] 手动搜索失败:', error);
+      console.error('[歌词搜索] 手动搜索失败:', error);
+      setLyricsSearchStatus('failed');
     } finally {
       setIsSearchingLyrics(false);
     }
   }, [applyLyricsCandidate, isSearchingLyrics, metadata.artist, metadata.title, searchLyricsCandidatesWithBackend]);
 
+  const handleLyricsSearchKeywordChange = useCallback(() => {
+    if (isSearchingLyrics) return;
+    if (lyricsSearchStatus === 'failed' || lyricsSearchStatus === 'not_found' || lyricsSearchStatus === 'success') {
+      if (lyricsSearchStatusTimerRef.current) {
+        window.clearTimeout(lyricsSearchStatusTimerRef.current);
+        lyricsSearchStatusTimerRef.current = null;
+      }
+      setLyricsSearchStatus('idle');
+    }
+  }, [isSearchingLyrics, lyricsSearchStatus]);
+
   const handleSwitchLyrics = useCallback(() => {
     if (lyricsCandidates.length <= 1) return;
     const nextIndex = (currentLyricsIndex + 1) % lyricsCandidates.length;
     applyLyricsCandidate(lyricsCandidates[nextIndex], nextIndex);
-  }, [applyLyricsCandidate, currentLyricsIndex, lyricsCandidates]);
+  }, [lyricsCandidates, currentLyricsIndex]);
 
   const handleSaveLyrics = useCallback(async () => {
     if (isSavingLyrics || !metadata.lyrics?.trim() || !filePathRef.current) return;
@@ -631,17 +676,17 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
         lyrics: metadata.lyrics,
       });
 
-      window.console.log('[歌词搜索] 本地歌词保存成功:', savedPath);
+      console.log('[歌词搜索] 本地歌词保存成功:', savedPath);
       setMetadata(prev => ({
         ...prev,
         lyricsSource: '本地歌词',
       }));
     } catch (error) {
-      window.console.error('[歌词搜索] 保存本地歌词失败:', error);
+      console.error('[歌词搜索] 保存本地歌词失败:', error);
     } finally {
       setIsSavingLyrics(false);
     }
-  }, [isSavingLyrics, metadata.lyrics]);
+  }, [metadata.lyrics]);
 
   useEffect(() => {
     if (externalPlayPause) externalPlayPause.current = handlePlayPause;
@@ -650,7 +695,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     if (externalMute) externalMute.current = handleMute;
     if (externalSeekForward) externalSeekForward.current = handleSeekForward;
     if (externalSeekBackward) externalSeekBackward.current = handleSeekBackward;
-    if (externalSeekTo) externalSeekTo.current = (time: number) => handleSeek(time);
+    if (externalSeekTo) externalSeekTo.current = handleSeek;
   }, [externalMute, externalPlayPause, externalSeekBackward, externalSeekForward, externalSeekTo, externalVolumeDown, externalVolumeUp, handleMute, handlePlayPause, handleSeek, handleSeekBackward, handleSeekForward, handleVolumeDown, handleVolumeUp]);
 
   return (
@@ -688,9 +733,11 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             metadata={metadata}
             currentTime={playerState.currentTime}
             onSearchLyrics={handleSearchLyrics}
+            onSearchKeywordChange={handleLyricsSearchKeywordChange}
             onSwitchLyrics={handleSwitchLyrics}
             onSaveLyrics={handleSaveLyrics}
             isSearchingLyrics={isSearchingLyrics}
+            lyricsSearchStatus={lyricsSearchStatus}
             isSavingLyrics={isSavingLyrics}
             hasLyricsCandidates={lyricsCandidates.length > 1}
             currentLyricsIndex={currentLyricsIndex}
@@ -702,6 +749,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             audioElement={audioRef.current}
             isPlaying={playerState.isPlaying}
             height={0}
+            title={metadata.title || fileName}
+            artist={metadata.artist || '未知艺术家'}
           />
         </div>
       </div>

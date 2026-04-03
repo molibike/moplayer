@@ -4,12 +4,16 @@ interface AudioVisualizerProps {
   audioElement?: HTMLAudioElement | null;
   isPlaying: boolean;
   height?: number;
+  title?: string;
+  artist?: string;
 }
 
 const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ 
   audioElement, 
   isPlaying, 
-  height = 120 
+  height = 120,
+  title,
+  artist
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // 使用setInterval定时器ID，避免requestAnimationFrame保持WebView2渲染循环
@@ -177,6 +181,31 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   return (
     <div className="w-full h-full flex flex-col">
       <div className="relative flex-1">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none px-8">
+          <div className="text-center" style={{ opacity: isPlaying ? 0.2 : 0.28 }}>
+            <div
+              className="text-white font-bold tracking-wide"
+              style={{
+                fontSize: 'clamp(1.2rem, 3vw, 2.4rem)',
+                lineHeight: 1.15,
+                textShadow: '0 2px 18px rgba(0, 0, 0, 0.45)',
+                wordBreak: 'break-word'
+              }}
+            >
+              {title || '未识别标题'}
+            </div>
+            <div
+              className="text-blue-200"
+              style={{
+                marginTop: '0.45rem',
+                fontSize: 'clamp(0.8rem, 1.7vw, 1rem)',
+                textShadow: '0 1px 12px rgba(0, 0, 0, 0.4)'
+              }}
+            >
+              {artist || '未知艺术家'}
+            </div>
+          </div>
+        </div>
         <canvas
           ref={canvasRef}
           width={800}
