@@ -9,6 +9,8 @@ interface MenuBarProps {
   isPlaying?: boolean; // 兼容旧逻辑
   autoHide?: boolean;  // 新增：图片/视频模式下均可自动隐藏
   onlineMusicEnabled?: boolean;
+  onlineMusicServiceStatus?: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
+  onlineMusicServiceMessage?: string;
   onToggleOnlineMusic?: () => void;
 }
 
@@ -26,7 +28,16 @@ interface SeparatorItem {
   separator: true;
 }
 
-const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlaying = false, autoHide = false, onlineMusicEnabled = false, onToggleOnlineMusic }) => {
+const MenuBar: React.FC<MenuBarProps> = ({
+  onOpenFile,
+  onExit: _onExit,
+  isPlaying = false,
+  autoHide = false,
+  onlineMusicEnabled = false,
+  onlineMusicServiceStatus = 'stopped',
+  onlineMusicServiceMessage = '在线服务已关闭',
+  onToggleOnlineMusic
+}) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(true);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -88,6 +99,14 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
       ]
     }
   ];
+
+  const onlineMusicButtonDisabled = onlineMusicServiceStatus === 'starting' || onlineMusicServiceStatus === 'stopping';
+  const onlineMusicStatusClassName = (() => {
+    if (onlineMusicServiceStatus === 'running') return 'text-emerald-300';
+    if (onlineMusicServiceStatus === 'starting' || onlineMusicServiceStatus === 'stopping') return 'text-amber-300';
+    if (onlineMusicServiceStatus === 'error') return 'text-red-300';
+    return 'text-gray-400';
+  })();
 
   // 菜单栏显示逻辑：当 autoHide 为真时，鼠标静止5秒或离开窗口即隐藏
   useEffect(() => {
@@ -272,15 +291,6 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
           <div className="px-2 md:px-4 truncate">
             <span className="text-sm font-semibold text-gray-200 truncate">MoPlayer</span>
           </div>
-          <button
-            className={`ml-1 px-3 py-1 text-xs rounded-full border transition-colors ${onlineMusicEnabled ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200' : 'border-gray-600 bg-gray-800/60 text-gray-300 hover:bg-gray-700/70'}`}
-            onClick={onToggleOnlineMusic}
-            onMouseEnter={() => setIsVisible(true)}
-            data-prevent-drag
-            title={onlineMusicEnabled ? '关闭在线音乐' : '打开在线音乐'}
-          >
-            在线音乐 {onlineMusicEnabled ? '开' : '关'}
-          </button>
           <div className="flex items-center space-x-1 flex-shrink min-w-0">
             {menuItems.map((menu) => (
             <div key={menu.key} className="relative">
@@ -326,6 +336,28 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
               )}
             </div>
           ))}
+          </div>
+          <div className="ml-2 flex items-center gap-2 flex-shrink-0 max-w-[42vw]">
+            <button
+              className={`px-3 py-1 text-xs rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
+                onlineMusicEnabled
+                  ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200'
+                  : 'border-gray-600 bg-gray-800/60 text-gray-300 hover:bg-gray-700/70'
+              }`}
+              onClick={onToggleOnlineMusic}
+              onMouseEnter={() => setIsVisible(true)}
+              data-prevent-drag
+              disabled={onlineMusicButtonDisabled}
+              title={onlineMusicEnabled ? '关闭在线音乐' : '打开在线音乐'}
+            >
+              在线音乐 {onlineMusicEnabled ? '开' : '关'}
+            </button>
+            <span
+              className={`text-xs truncate ${onlineMusicStatusClassName}`}
+              title={onlineMusicServiceMessage}
+            >
+              {onlineMusicServiceMessage}
+            </span>
           </div>
         </div>
 

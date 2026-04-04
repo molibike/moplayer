@@ -9,13 +9,14 @@ use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::{command, Manager, State};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 static DIST_PREVIEW_SERVER: OnceLock<()> = OnceLock::new();
+static MUSIC_SERVER_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
 fn normalize_search_text(input: &str) -> String {
     input
@@ -930,6 +931,10 @@ fn is_music_server_running() -> bool {
     is_port_open("127.0.0.1:31999")
 }
 
+fn music_server_child() -> &'static Mutex<Option<Child>> {
+    MUSIC_SERVER_CHILD.get_or_init(|| Mutex::new(None))
+}
+
 fn is_vite_dev_server_running() -> bool {
     is_port_open("127.0.0.1:5173")
 }
@@ -1060,6 +1065,40 @@ fn find_upwards(start: &Path, relative: &str, max_depth: usize) -> Option<PathBu
     None
 }
 
+fn resolve_music_server_script_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let mut script_candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        script_candidates.push(resource_dir.join("local-music-server.mjs"));
+        script_candidates.push(resource_dir.join("resources").join("local-music-server.mjs"));
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        script_candidates.push(current_dir.join("scripts").join("local-music-server.mjs"));
+        script_candidates.push(current_dir.join("..").join("scripts").join("local-music-server.mjs"));
+        if let Some(found) = find_upwards(&current_dir, "scripts\\local-music-server.mjs", 8) {
+            script_candidates.push(found);
+        }
+        if let Some(found) = find_upwards(&current_dir, "scripts/local-music-server.mjs", 8) {
+            script_candidates.push(found);
+        }
+    }
+
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|path| path.parent().map(|parent| parent.to_path_buf())) {
+        script_candidates.push(exe_dir.join("local-music-server.mjs"));
+        script_candidates.push(exe_dir.join("resources").join("local-music-server.mjs"));
+        script_candidates.push(exe_dir.join("..").join("resources").join("local-music-server.mjs"));
+        if let Some(found) = find_upwards(&exe_dir, "scripts\\local-music-server.mjs", 8) {
+            script_candidates.push(found);
+        }
+        if let Some(found) = find_upwards(&exe_dir, "scripts/local-music-server.mjs", 8) {
+            script_candidates.push(found);
+        }
+    }
+
+    script_candidates.into_iter().find(|path| path.exists())
+}
+
 fn try_fallback_to_dist(app: &tauri::AppHandle) {
     if !cfg!(debug_assertions) {
         return;
@@ -1117,114 +1156,110 @@ fn try_fallback_to_dist(app: &tauri::AppHandle) {
     let _ = window.navigate(url);
 }
 
-fn try_start_music_server(app: &tauri::AppHandle) {
+fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
+    if let Ok(mut guard) = music_server_child().lock() {
+        if let Some(child) = guard.as_mut() {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    *guard = None;
+                }
+                Ok(None) => {
+                    return Ok(true);
+                }
+                Err(error) => {
+                    return Err(format!("检查在线音乐服务进程状态失败: {}", error));
+                }
+            }
+        }
+    } else {
+        return Err("无法锁定在线音乐服务进程状态".to_string());
+    }
+
     if is_music_server_running() {
-        println!("[music-server] 本地在线音乐服务已在运行，跳过自动启动");
-        return;
+        println!("[music-server] 检测到本地在线音乐服务已在运行，复用现有服务");
+        return Ok(true);
     }
 
-    let mut script_candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        script_candidates.push(resource_dir.join("local-music-server.mjs"));
-        script_candidates.push(resource_dir.join("resources").join("local-music-server.mjs"));
-    }
-
-    if let Ok(current_dir) = std::env::current_dir() {
-        script_candidates.push(current_dir.join("scripts").join("local-music-server.mjs"));
-        script_candidates.push(current_dir.join("..").join("scripts").join("local-music-server.mjs"));
-        if let Some(found) = find_upwards(&current_dir, "scripts\\local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-        if let Some(found) = find_upwards(&current_dir, "scripts/local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-    }
-
-    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|path| path.parent().map(|parent| parent.to_path_buf())) {
-        script_candidates.push(exe_dir.join("local-music-server.mjs"));
-        script_candidates.push(exe_dir.join("resources").join("local-music-server.mjs"));
-        script_candidates.push(exe_dir.join("..").join("resources").join("local-music-server.mjs"));
-        if let Some(found) = find_upwards(&exe_dir, "scripts\\local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-        if let Some(found) = find_upwards(&exe_dir, "scripts/local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-    }
-
-    let script_path = script_candidates.into_iter().find(|path| path.exists());
-
-    let Some(script_path) = script_path else {
-        eprintln!("[music-server] 未找到 local-music-server.mjs，无法自动启动在线音乐服务");
-        return;
+    let Some(script_path) = resolve_music_server_script_path(app) else {
+        return Err("未找到 local-music-server.mjs，无法启动在线音乐服务".to_string());
     };
 
     let script_display = script_path.to_string_lossy().to_string();
     let script_parent = script_path.parent().map(|p| p.to_path_buf());
 
-    let spawn_result = if cfg!(debug_assertions) {
-        #[cfg(target_os = "windows")]
-        {
-            let mut command = Command::new("cmd");
-            command
-                .arg("/C")
-                .arg("start")
-                .arg("MoPlayer 在线音乐服务")
-                .arg("node")
-                .arg(&script_display)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            if let Some(parent) = &script_parent {
-                command.current_dir(parent);
-            }
-            command.spawn()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let mut command = Command::new("node");
-            command
-                .arg(&script_display)
-                .stdin(Stdio::null())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit());
-            if let Some(parent) = &script_parent {
-                command.current_dir(parent);
-            }
-            command.spawn()
-        }
+    let mut command = Command::new("node");
+    command
+        .arg(&script_display)
+        .stdin(Stdio::null());
+    if cfg!(debug_assertions) {
+        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     } else {
-        let mut command = Command::new("node");
-        command
-            .arg(&script_display)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if let Some(parent) = &script_parent {
-            command.current_dir(parent);
+        command.stdout(Stdio::null()).stderr(Stdio::null());
+    }
+    if let Some(parent) = &script_parent {
+        command.current_dir(parent);
+    }
+    #[cfg(target_os = "windows")]
+    if !cfg!(debug_assertions) {
+        command.creation_flags(0x08000000);
+    }
+
+    let child = command
+        .spawn()
+        .map_err(|error| format!("启动在线音乐服务失败: {}", error))?;
+
+    if let Ok(mut guard) = music_server_child().lock() {
+        *guard = Some(child);
+    } else {
+        return Err("在线音乐服务已启动，但无法记录进程句柄".to_string());
+    }
+
+    println!("[music-server] 已启动本地在线音乐服务脚本: {}", script_path.display());
+    for _ in 0..30 {
+        if is_music_server_running() {
+            return Ok(true);
         }
-        #[cfg(target_os = "windows")]
-        {
-            command.creation_flags(0x08000000);
-        }
-        command.spawn()
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    Err("在线音乐服务启动超时，请稍后重试".to_string())
+}
+
+fn stop_music_server_process() -> Result<bool, String> {
+    let Ok(mut guard) = music_server_child().lock() else {
+        return Err("无法锁定在线音乐服务进程状态".to_string());
     };
 
-    match spawn_result {
-        Ok(_) => {
-            println!("[music-server] 已自动启动本地在线音乐服务脚本: {}", script_path.display());
-            for _ in 0..30 {
-                if is_music_server_running() {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-        }
-        Err(error) => {
-            eprintln!("[music-server] 自动启动失败: {}", error);
-        }
+    let Some(mut child) = guard.take() else {
+        return Ok(false);
     };
+
+    match child.try_wait() {
+        Ok(Some(_)) => {
+            return Ok(false);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(format!("检查在线音乐服务进程状态失败: {}", error));
+        }
+    }
+
+    child
+        .kill()
+        .map_err(|error| format!("停止在线音乐服务失败: {}", error))?;
+    let _ = child.wait();
+    println!("[music-server] 已停止本地在线音乐服务");
+    Ok(true)
+}
+
+#[command]
+fn start_music_server(app: tauri::AppHandle) -> Result<bool, String> {
+    start_music_server_process(&app)
+}
+
+#[command]
+fn stop_music_server() -> Result<bool, String> {
+    stop_music_server_process()
 }
 
 fn main() {
@@ -1248,11 +1283,12 @@ fn main() {
             search_lyrics,
             search_lyrics_candidates,
             load_local_lyrics,
-            save_local_lyrics
+            save_local_lyrics,
+            start_music_server,
+            stop_music_server
         ])
         .setup(|app| {
             try_fallback_to_dist(&app.handle());
-            try_start_music_server(&app.handle());
 
             let args: Vec<String> = std::env::args().collect();
             println!("Command line arguments: {:?}", args);

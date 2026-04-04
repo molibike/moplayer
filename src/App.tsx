@@ -48,6 +48,7 @@ interface PlaylistItem {
 }
 
 type PlayMode = 'sequential' | 'single' | 'list' | 'random';
+type OnlineMusicServiceStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
 
 interface OnlineMusicSearchResult {
   id: string;
@@ -110,6 +111,8 @@ function App() {
   const [onlineMusicError, setOnlineMusicError] = useState('');
   const [onlineMusicResults, setOnlineMusicResults] = useState<OnlineMusicSearchResult[]>([]);
   const [currentOnlineTrackId, setCurrentOnlineTrackId] = useState<string>('');
+  const [onlineMusicServiceStatus, setOnlineMusicServiceStatus] = useState<OnlineMusicServiceStatus>('stopped');
+  const [onlineMusicServiceMessage, setOnlineMusicServiceMessage] = useState('在线服务已关闭');
   const [storedOnlinePlaylistItems, setStoredOnlinePlaylistItems] = useState<PersistedPlaylistItem[]>([]);
   const onlineMusicServiceBaseUrl = 'http://127.0.0.1:31999';
   const onlineLyricsCacheRef = useRef<Record<string, { lyrics: string; lyricsSource?: string }>>({});
@@ -770,6 +773,45 @@ function App() {
     }
   }, [markOnlineMusicInteraction]);
 
+  const ensureOnlineMusicServerStarted = useCallback(async () => {
+    if (onlineMusicServiceStatus === 'running') {
+      return;
+    }
+
+    setOnlineMusicServiceStatus('starting');
+    setOnlineMusicServiceMessage('在线服务启动中...');
+    try {
+      await invoke('start_music_server');
+      setOnlineMusicServiceStatus('running');
+      setOnlineMusicServiceMessage('在线服务已启动');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '在线服务启动失败';
+      setOnlineMusicServiceStatus('error');
+      setOnlineMusicServiceMessage(message);
+      throw error;
+    }
+  }, [onlineMusicServiceStatus]);
+
+  const stopOnlineMusicServer = useCallback(async () => {
+    if (onlineMusicServiceStatus === 'stopped') {
+      setOnlineMusicServiceMessage('在线服务已关闭');
+      return;
+    }
+
+    setOnlineMusicServiceStatus('stopping');
+    setOnlineMusicServiceMessage('在线服务关闭中...');
+    try {
+      await invoke('stop_music_server');
+      setOnlineMusicServiceStatus('stopped');
+      setOnlineMusicServiceMessage('在线服务已关闭');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '在线服务关闭失败';
+      setOnlineMusicServiceStatus('error');
+      setOnlineMusicServiceMessage(message);
+      throw error;
+    }
+  }, [onlineMusicServiceStatus]);
+
   const createOnlineFile = useCallback((item: OnlineMusicSearchResult) => {
     return new File([], `${item.artist ? `${item.artist} - ` : ''}${item.title}.mp3`, { type: 'audio/mpeg' });
   }, []);
@@ -936,6 +978,7 @@ function App() {
     setOnlineMusicSearching(true);
     setOnlineMusicError('');
     try {
+      await ensureOnlineMusicServerStarted();
       const healthUrl = `${onlineMusicServiceBaseUrl}/api/music/health`;
       let healthOk = false;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -969,7 +1012,7 @@ function App() {
     } catch (err) {
       console.error('在线音乐搜索失败:', err);
       setOnlineMusicResults([]);
-      setOnlineMusicError('在线音乐搜索失败，请稍后重试。');
+      setOnlineMusicError(err instanceof Error ? err.message : '在线音乐搜索失败，请稍后重试。');
     } finally {
       setOnlineMusicSearching(false);
     }
@@ -984,6 +1027,7 @@ function App() {
     markOnlineMusicInteraction();
 
     try {
+      await ensureOnlineMusicServerStarted();
       await verifyOnlineStream(item);
     } catch (error) {
       console.error('在线音源预检查失败:', error);
@@ -1022,6 +1066,7 @@ function App() {
     if (playlist.some(entry => entry.id === `online-${item.id}`)) {
       return;
     }
+    await ensureOnlineMusicServerStarted();
     const lyricsPayload = await fetchOnlineLyrics(item);
     const nextItem = createOnlinePlaylistItem(item);
     if (nextItem.onlineMusic) {
@@ -1032,11 +1077,23 @@ function App() {
     setPlaylist(prev => [...prev, nextItem]);
   };
 
-  const handleToggleOnlineMusic = () => {
+  const handleToggleOnlineMusic = async () => {
     const next = !onlineMusicEnabled;
-    setOnlineMusicEnabled(next);
 
     if (next) {
+      try {
+        setOnlineMusicError('');
+        await ensureOnlineMusicServerStarted();
+      } catch (error) {
+        console.error('在线音乐服务启动失败:', error);
+        setOnlineMusicEnabled(false);
+        setAudioInfoTab('lyrics');
+        setOnlineMusicError(error instanceof Error ? error.message : '在线音乐服务启动失败，请稍后重试');
+        setError(error instanceof Error ? error.message : '在线音乐服务启动失败，请稍后重试');
+        return;
+      }
+
+      setOnlineMusicEnabled(true);
       const currentItem = currentPlaylistIndex >= 0 ? playlist[currentPlaylistIndex] : undefined;
       const currentIsAudio = currentItem ? isAudioFile(currentItem.file) : false;
       setPlaylistViewMode('audio');
@@ -1051,6 +1108,7 @@ function App() {
       return;
     }
 
+    setOnlineMusicEnabled(false);
     const currentItem = currentPlaylistIndex >= 0 ? playlist[currentPlaylistIndex] : undefined;
     const currentItemId = currentItem?.id;
     const nextPlaylist = playlist.filter(item => !isOnlinePlaylistItem(item));
@@ -1068,6 +1126,11 @@ function App() {
       setPlayerState(state => ({ ...state, isPlaying: false, currentTime: 0, duration: 0 }));
     } else {
       setCurrentPlaylistIndex(nextIndex);
+    }
+    try {
+      await stopOnlineMusicServer();
+    } catch (error) {
+      console.warn('关闭在线音乐服务失败:', error);
     }
   };
 
@@ -1120,6 +1183,8 @@ function App() {
         setVideoSrc('');
         lastSelectedFileRef.current = null;
         setCurrentOnlineTrackId('');
+        setOnlineMusicServiceStatus('stopped');
+        setOnlineMusicServiceMessage('在线服务已关闭');
         setOnlineMusicEnabled(false);
         setAudioInfoTab('lyrics');
         setPlaylistViewMode('audio');
@@ -1312,6 +1377,7 @@ function App() {
 
   const handleExit = async () => {
     try {
+      await stopOnlineMusicServer().catch(() => {});
       const appWindow = getCurrentWindow();
       await appWindow.close();
     } catch (error) {
@@ -1459,6 +1525,8 @@ function App() {
         onExit={handleExit}
         isPlaying={videoSrc ? playerState.isPlaying : false}
         onlineMusicEnabled={onlineMusicEnabled}
+        onlineMusicServiceStatus={onlineMusicServiceStatus}
+        onlineMusicServiceMessage={onlineMusicServiceMessage}
         onToggleOnlineMusic={handleToggleOnlineMusic}
         autoHide={(getCurrentMediaType() === 'image') || (getCurrentMediaType() === 'video' && playerState.isPlaying) || (() => {
           const item = playlist[currentPlaylistIndex];

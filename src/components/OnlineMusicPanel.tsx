@@ -151,6 +151,7 @@ const OnlineMusicPanel: React.FC<OnlineMusicPanelProps> = ({
             {results.map((item) => {
               const isCurrent = currentTrackId === item.id;
               const isInPlaylist = playlistTrackIds.includes(item.id);
+              const durationText = formatDuration(item.durationMs);
               return (
                 <div
                   key={item.id}
@@ -158,11 +159,13 @@ const OnlineMusicPanel: React.FC<OnlineMusicPanelProps> = ({
                 >
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold text-white">{item.title}</div>
-                    <div className="mt-1 truncate text-xs text-gray-300">
-                      {item.artist || '未知歌手'}
-                      <span className="ml-2 text-gray-500">{getSourceLabel(item)}</span>
-                      {formatDuration(item.durationMs) ? (
-                        <span className="ml-2 text-gray-400">{formatDuration(item.durationMs)}</span>
+                    <div className="mt-1 flex items-center gap-3 text-xs">
+                      <div className="min-w-0 flex-1 truncate text-gray-300">
+                        {item.artist || '未知歌手'}
+                        <span className="ml-2 text-gray-500">{getSourceLabel(item)}</span>
+                      </div>
+                      {durationText ? (
+                        <div className="shrink-0 tabular-nums text-gray-400">{durationText}</div>
                       ) : null}
                     </div>
                     {item.album ? (

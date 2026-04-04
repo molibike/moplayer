@@ -419,8 +419,8 @@ const createTrackPayload = (item) => {
   ].filter((value, index, array) => array.indexOf(value) === index);
   const artist = artistList.join(' / ');
   const source = normalizeText(item?.source ?? item?.server ?? 'netease') || 'netease';
-  const album = normalizeText(item?.album ?? item?.albumname ?? item?.al?.name ?? item?.collection ?? '');
-  const cover = normalizeText(item?.pic ?? item?.cover ?? item?.image ?? item?.al?.picUrl ?? '');
+  const album = normalizeText(item?.album ?? item?.albumname ?? item?.album?.name ?? item?.al?.name ?? item?.collection ?? '');
+  const cover = normalizeText(item?.pic ?? item?.cover ?? item?.image ?? item?.album?.picUrl ?? item?.al?.picUrl ?? '');
   const url = normalizeText(item?.url ?? item?.streamUrl ?? '');
   const durationMs = normalizeDurationMs(
     item?.durationMs ?? item?.duration_ms ?? item?.dt ?? item?.duration ?? item?.interval
@@ -477,7 +477,7 @@ const extractFallbackSongs = (payload) => {
 };
 
 const searchTracksFromNeteaseFallback = async (keyword) => {
-  const upstreamUrl = `https://music.163.com/api/search/get/web?type=1&offset=0&total=true&limit=20&s=${encodeURIComponent(keyword)}`;
+  const upstreamUrl = `https://music.163.com/api/cloudsearch/pc?type=1&offset=0&limit=20&s=${encodeURIComponent(keyword)}`;
   const response = await requestText(upstreamUrl, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -494,6 +494,18 @@ const searchTracksFromNeteaseFallback = async (keyword) => {
 };
 
 const searchTracks = async ({ keyword, source = 'netease' }) => {
+  if (source === 'netease') {
+    try {
+      const fallbackResults = await searchTracksFromNeteaseFallback(keyword);
+      if (fallbackResults.length > 0) {
+        return fallbackResults;
+      }
+      console.warn('[music-server] 网易云官方搜索未返回有效结果，准备回退 meting 搜索');
+    } catch (error) {
+      console.warn('[music-server] 网易云官方搜索失败，准备回退 meting 搜索:', error);
+    }
+  }
+
   const upstreamUrl = `${METING_API_BASE}?server=${encodeURIComponent(source)}&type=search&format=json&id=${encodeURIComponent(keyword)}`;
   try {
     const response = await requestText(upstreamUrl, {
@@ -511,13 +523,6 @@ const searchTracks = async ({ keyword, source = 'netease' }) => {
     console.warn('[music-server] meting搜索未返回有效JSON结果，准备回退网易云搜索');
   } catch (error) {
     console.warn('[music-server] meting搜索失败，准备回退网易云搜索:', error);
-  }
-
-  if (source === 'netease') {
-    const fallbackResults = await searchTracksFromNeteaseFallback(keyword);
-    if (fallbackResults.length > 0) {
-      return fallbackResults;
-    }
   }
 
   return [];
