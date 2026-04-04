@@ -158,8 +158,10 @@ function App() {
   const [onlineMusicServiceStatus, setOnlineMusicServiceStatus] = useState<OnlineMusicServiceStatus>('stopped');
   const [onlineMusicServiceMessage, setOnlineMusicServiceMessage] = useState('在线服务已关闭');
   const [storedOnlinePlaylistItems, setStoredOnlinePlaylistItems] = useState<PersistedPlaylistItem[]>([]);
+  const [startupFilePath, setStartupFilePath] = useState<string | null | undefined>(undefined);
   const onlineMusicServiceBaseUrl = 'http://127.0.0.1:31999';
   const onlineLyricsCacheRef = useRef<Record<string, { lyrics: string; lyricsSource?: string }>>({});
+  const playlistRestoreStartedRef = useRef(false);
   const playlistRestoreCompletedRef = useRef(false);
   const onlineMusicIdleTimerRef = useRef<number | null>(null);
   const [onlineMusicInteractionTick, setOnlineMusicInteractionTick] = useState(0);
@@ -1479,6 +1481,36 @@ function App() {
     .filter(Boolean);
 
   useEffect(() => {
+    (async () => {
+      try {
+        const path = await invoke<string | null>('get_startup_file');
+        if (path && typeof path === 'string' && path.length > 0) {
+          setStartupFilePath(path);
+          return;
+        }
+      } catch (error) {
+        console.warn('获取启动文件路径失败:', error);
+      }
+
+      setStartupFilePath(null);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (startupFilePath === undefined) {
+      return;
+    }
+
+    if (playlistRestoreStartedRef.current || playlistRestoreCompletedRef.current) {
+      return;
+    }
+
+    const mediaType = getCurrentMediaType();
+    if (mediaType !== 'audio' && mediaType !== 'video') {
+      return;
+    }
+
+    playlistRestoreStartedRef.current = true;
     let cancelled = false;
 
     (async () => {
@@ -1512,25 +1544,41 @@ function App() {
           return;
         }
 
-        setStoredOnlinePlaylistItems(restoredOnlineItems);
-        setPlaylist(restoredLocalItems);
+        setStoredOnlinePlaylistItems(prev => {
+          const existingIds = new Set(prev.map(item => item.id));
+          const missingItems = restoredOnlineItems.filter(item => !existingIds.has(item.id));
+          if (missingItems.length === 0) {
+            return prev;
+          }
+          return [...prev, ...missingItems];
+        });
 
-        const restoredIndex = parsed?.currentItemId
-          ? restoredLocalItems.findIndex(item => item.id === parsed.currentItemId)
-          : -1;
-        const nextIndex = restoredIndex >= 0 ? restoredIndex : -1;
-        setCurrentPlaylistIndex(nextIndex);
-        setVideoSrc('');
-        lastSelectedFileRef.current = null;
-        setCurrentOnlineTrackId('');
-        setOnlineMusicServiceStatus('stopped');
-        setOnlineMusicServiceMessage('在线服务已关闭');
-        setOnlineMusicEnabled(false);
-        setAudioInfoTab('lyrics');
-        setPlaylistViewMode('audio');
-        setDirPlaylist([]);
-        setDirCurrentIndex(-1);
-        setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0, duration: 0 }));
+        setPlaylist(prev => {
+          const existingLocalPaths = new Set(
+            prev
+              .map(item => item.originalPath)
+              .filter((path): path is string => !!path)
+          );
+          const missingLocalItems = restoredLocalItems.filter(item => {
+            if (item.originalPath) {
+              return !existingLocalPaths.has(item.originalPath);
+            }
+            return !prev.some(entry => entry.id === item.id);
+          });
+
+          if (missingLocalItems.length === 0) {
+            return prev;
+          }
+
+          const next = [...prev, ...missingLocalItems];
+          if (parsed?.currentItemId) {
+            const restoredIndex = next.findIndex(item => item.id === parsed.currentItemId);
+            if (restoredIndex >= 0) {
+              setCurrentPlaylistIndex(prevIndex => prevIndex >= 0 ? prevIndex : restoredIndex);
+            }
+          }
+          return next;
+        });
       } catch (error) {
         console.warn('恢复播放列表失败:', error);
       } finally {
@@ -1541,7 +1589,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [restoreLocalPlaylistItem, restoreOnlinePlaylistItem]);
+  }, [currentPlaylistIndex, onlineMusicEnabled, playlist, restoreLocalPlaylistItem, startupFilePath, videoSrc]);
 
   useEffect(() => {
     if (!onlineMusicEnabled || storedOnlinePlaylistItems.length === 0) {
@@ -1629,6 +1677,16 @@ function App() {
   const currentOnlineTrack = currentPlaylistIndex >= 0
     ? playlist[currentPlaylistIndex]?.onlineMusic
     : undefined;
+  const currentMediaType = getCurrentMediaType();
+  const currentItem = currentPlaylistIndex >= 0 && currentPlaylistIndex < playlist.length
+    ? playlist[currentPlaylistIndex]
+    : undefined;
+  const currentItemPath = currentItem?.originalPath || (currentItem ? getFilePath(currentItem.file) || '' : '');
+  const showOnlineMusicControls = currentMediaType === 'audio' || (!videoSrc && currentPlaylistIndex < 0);
+  const menuBarAutoHide = currentMediaType === 'image'
+    || (currentMediaType === 'video' && playerState.isPlaying)
+    || (typeof currentItemPath === 'string' && /\.pdf$/i.test(currentItemPath))
+    || (!!currentItem && isPdfFile(currentItem.file));
 
   // 窗口拖拽功能 - 全窗口拖拽
   useEffect(() => {
@@ -1790,28 +1848,25 @@ function App() {
     };
   }, []);
 
-  // 应用启动后主动拉取启动文件路径，确保“打开方式/右键菜单”即开即播
+  // 应用启动后优先处理启动文件
   useEffect(() => {
+    if (!startupFilePath) {
+      return;
+    }
+
     (async () => {
       try {
-        const path = await invoke<string | null>('get_startup_file');
-        if (path && typeof path === 'string' && path.length > 0) {
-          try {
-            const bytes = await readFile(path);
-            const name = path.replace(/\\/g, '/').split('/').pop() || '未命名文件';
-            const mime = guessMimeType(path);
-            const file = new File([bytes], name, { type: mime });
-            (file as any).path = path;
-            await handleFileSelect(file);
-          } catch (e) {
-            console.error('拉取启动文件并打开失败:', e);
-          }
-        }
+        const bytes = await readFile(startupFilePath);
+        const name = startupFilePath.replace(/\\/g, '/').split('/').pop() || '未命名文件';
+        const mime = guessMimeType(startupFilePath);
+        const file = new File([bytes], name, { type: mime });
+        (file as any).path = startupFilePath;
+        await handleFileSelect(file);
       } catch (e) {
-        console.warn('获取启动文件路径失败:', e);
+        console.error('拉取启动文件并打开失败:', e);
       }
     })();
-  }, []);
+  }, [startupFilePath]);
 
   return (
     <div 
@@ -1868,13 +1923,8 @@ function App() {
         onlineMusicServiceStatus={onlineMusicServiceStatus}
         onlineMusicServiceMessage={onlineMusicServiceMessage}
         onToggleOnlineMusic={handleToggleOnlineMusic}
-        autoHide={(getCurrentMediaType() === 'image') || (getCurrentMediaType() === 'video' && playerState.isPlaying) || (() => {
-          const item = playlist[currentPlaylistIndex];
-          if (!item) return false;
-          const f = item.file;
-          const p = item?.originalPath || getFilePath(f) || '';
-          return (typeof p === 'string' && /\.pdf$/i.test(p)) || isPdfFile(f);
-        })()}
+        showOnlineMusicControls={showOnlineMusicControls}
+        autoHide={menuBarAutoHide}
       />
 
       {/* 拖拽覆盖层 */}
@@ -1930,7 +1980,7 @@ function App() {
             onOnlineMusicPlay={handlePlayOnlineMusic}
             onOnlineMusicAddToPlaylist={handleAddOnlineMusicToPlaylist}
             onOnlineMusicInteraction={markOnlineMusicInteraction}
-            autoHideTabs={(getCurrentMediaType() === 'image') || (getCurrentMediaType() === 'video' && playerState.isPlaying)}
+            autoHideTabs={currentMediaType === 'image' || (currentMediaType === 'video' && playerState.isPlaying)}
             onStateChange={handlePlayerStateChange}
             onError={handleError}
             onEnded={handleTrackEnded}
@@ -1945,7 +1995,7 @@ function App() {
         )}
 
         {/* 控制栏 - 仅在音频和视频模式下显示 */}
-        {(videoSrc || onlineMusicEnabled) && getCurrentMediaType() !== 'image' && (
+        {(videoSrc || onlineMusicEnabled) && currentMediaType !== 'image' && (
           <ControlBar
             onPlayPause={() => playPauseRef.current?.()}
             onStop={handleStop}

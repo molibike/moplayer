@@ -8,6 +8,7 @@ interface MenuBarProps {
   onExit: () => void;
   isPlaying?: boolean; // 兼容旧逻辑
   autoHide?: boolean;  // 新增：图片/视频模式下均可自动隐藏
+  showOnlineMusicControls?: boolean;
   onlineMusicEnabled?: boolean;
   onlineMusicServiceStatus?: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
   onlineMusicServiceMessage?: string;
@@ -33,6 +34,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
   onExit: _onExit,
   isPlaying = false,
   autoHide = false,
+  showOnlineMusicControls = true,
   onlineMusicEnabled = false,
   onlineMusicServiceStatus = 'stopped',
   onlineMusicServiceMessage = '在线服务已关闭',
@@ -337,28 +339,30 @@ const MenuBar: React.FC<MenuBarProps> = ({
             </div>
           ))}
           </div>
-          <div className="ml-2 flex items-center gap-2 flex-shrink-0 max-w-[42vw]">
-            <button
-              className={`px-3 py-1 text-xs rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
-                onlineMusicEnabled
-                  ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200'
-                  : 'border-gray-600 bg-gray-800/60 text-gray-300 hover:bg-gray-700/70'
-              }`}
-              onClick={onToggleOnlineMusic}
-              onMouseEnter={() => setIsVisible(true)}
-              data-prevent-drag
-              disabled={onlineMusicButtonDisabled}
-              title={onlineMusicEnabled ? '关闭在线音乐' : '打开在线音乐'}
-            >
-              在线音乐 {onlineMusicEnabled ? '开' : '关'}
-            </button>
-            <span
-              className={`text-xs truncate ${onlineMusicStatusClassName}`}
-              title={onlineMusicServiceMessage}
-            >
-              {onlineMusicServiceMessage}
-            </span>
-          </div>
+          {showOnlineMusicControls && (
+            <div className="ml-2 flex items-center gap-2 flex-shrink-0 max-w-[42vw]">
+              <button
+                className={`px-3 py-1 text-xs rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${
+                  onlineMusicEnabled
+                    ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200'
+                    : 'border-gray-600 bg-gray-800/60 text-gray-300 hover:bg-gray-700/70'
+                }`}
+                onClick={onToggleOnlineMusic}
+                onMouseEnter={() => setIsVisible(true)}
+                data-prevent-drag
+                disabled={onlineMusicButtonDisabled}
+                title={onlineMusicEnabled ? '关闭在线音乐' : '打开在线音乐'}
+              >
+                在线音乐 {onlineMusicEnabled ? '开' : '关'}
+              </button>
+              <span
+                className={`text-xs truncate ${onlineMusicStatusClassName}`}
+                title={onlineMusicServiceMessage}
+              >
+                {onlineMusicServiceMessage}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* 右侧：窗口控制按钮（不挤压、始终可见） */}
