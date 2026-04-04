@@ -53,6 +53,12 @@ interface OnlineMusicSearchResult {
   songId?: string;
 }
 
+interface OnlineMusicPlaybackStatus {
+  state: 'checking' | 'playable' | 'fallback' | 'unplayable';
+  resolvedSource?: string;
+  reason?: string;
+}
+
 interface AudioPlayerInterfaceProps {
   src: string;
   fileName: string;
@@ -72,10 +78,15 @@ interface AudioPlayerInterfaceProps {
   audioInfoTab?: 'lyrics' | 'online_music';
   onAudioInfoTabChange?: (tab: 'lyrics' | 'online_music') => void;
   onlineMusicKeyword?: string;
+  onlineMusicSources?: { value: string; label: string }[];
+  selectedOnlineMusicSources?: string[];
+  onSelectedOnlineMusicSourcesChange?: (sources: string[]) => void;
   onOnlineMusicKeywordChange?: (value: string) => void;
   onlineMusicSearching?: boolean;
   onlineMusicError?: string;
   onlineMusicResults?: OnlineMusicSearchResult[];
+  onlineMusicEmptyStateText?: string;
+  onlineMusicPlaybackStatuses?: Record<string, OnlineMusicPlaybackStatus>;
   currentOnlineTrackId?: string;
   onlinePlaylistTrackIds?: string[];
   currentOnlineTrack?: {
@@ -92,6 +103,7 @@ interface AudioPlayerInterfaceProps {
   onOnlineMusicPlay?: (item: OnlineMusicSearchResult) => void;
   onOnlineMusicAddToPlaylist?: (item: OnlineMusicSearchResult) => void;
   onOnlineMusicInteraction?: () => void;
+  autoHideTabs?: boolean;
 }
 
 type LyricsSearchStatus = 'idle' | 'searching' | 'success' | 'failed' | 'not_found';
@@ -115,10 +127,15 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   audioInfoTab = 'lyrics',
   onAudioInfoTabChange,
   onlineMusicKeyword = '',
+  onlineMusicSources = [],
+  selectedOnlineMusicSources = [],
+  onSelectedOnlineMusicSourcesChange,
   onOnlineMusicKeywordChange,
   onlineMusicSearching = false,
   onlineMusicError,
   onlineMusicResults = [],
+  onlineMusicEmptyStateText,
+  onlineMusicPlaybackStatuses = {},
   currentOnlineTrackId,
   onlinePlaylistTrackIds = [],
   currentOnlineTrack,
@@ -126,6 +143,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   onOnlineMusicPlay,
   onOnlineMusicAddToPlaylist,
   onOnlineMusicInteraction,
+  autoHideTabs,
 }) => {
   const middleButtonRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -846,9 +864,14 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             activeTab={audioInfoTab}
             onTabChange={onAudioInfoTabChange}
             onlineMusicKeyword={onlineMusicKeyword}
+            onlineMusicSources={onlineMusicSources}
+            selectedOnlineMusicSources={selectedOnlineMusicSources}
+            onSelectedOnlineMusicSourcesChange={onSelectedOnlineMusicSourcesChange}
             onlineMusicSearching={onlineMusicSearching}
             onlineMusicError={onlineMusicError}
             onlineMusicResults={onlineMusicResults}
+            onlineMusicEmptyStateText={onlineMusicEmptyStateText}
+            onlineMusicPlaybackStatuses={onlineMusicPlaybackStatuses}
             currentOnlineTrackId={currentOnlineTrackId}
             onlinePlaylistTrackIds={onlinePlaylistTrackIds}
             onOnlineMusicKeywordChange={onOnlineMusicKeywordChange}
@@ -856,6 +879,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             onOnlineMusicPlay={onOnlineMusicPlay}
             onOnlineMusicAddToPlaylist={onOnlineMusicAddToPlaylist}
             onOnlineMusicInteraction={onOnlineMusicInteraction}
+            autoHideTabs={autoHideTabs}
             onSearchLyrics={handleSearchLyrics}
             onSearchKeywordChange={handleLyricsSearchKeywordChange}
             onSwitchLyrics={handleSwitchLyrics}

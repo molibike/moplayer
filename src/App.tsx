@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -72,6 +72,23 @@ interface OnlineMusicSearchResult {
   lyricsSource?: string;
 }
 
+interface OnlineMusicPlaybackStatus {
+  state: 'checking' | 'playable' | 'fallback' | 'unplayable';
+  resolvedSource?: string;
+  resolvedTrack?: OnlineMusicSearchResult;
+  reason?: string;
+}
+
+interface OnlineMusicPlaybackCheckResult {
+  playableItem: OnlineMusicSearchResult;
+  status: OnlineMusicPlaybackStatus;
+}
+
+interface OnlineMusicPrecheckCacheEntry {
+  status: OnlineMusicPlaybackStatus;
+  playableItem?: OnlineMusicSearchResult;
+}
+
 interface PersistedPlaylistItem {
   id: string;
   name: string;
@@ -85,6 +102,29 @@ interface PersistedPlaylistState {
 }
 
 const PLAYLIST_STORAGE_KEY = 'moplayer:playlist:v1';
+const ONLINE_MUSIC_SOURCE_OPTIONS = [
+  { value: 'netease', label: '网易云' },
+  { value: 'tencent', label: 'QQ音乐' },
+  { value: 'kugou', label: '酷狗' },
+  { value: 'kuwo', label: '酷我' },
+] as const;
+const ONLINE_MUSIC_PRECHECK_CONCURRENCY = 3;
+const ONLINE_MUSIC_STREAM_CHECK_TIMEOUT_MS = 12000;
+
+const normalizeOnlineMusicSource = (source?: string) => {
+  const normalizedSource = typeof source === 'string' ? source.trim().toLowerCase() : '';
+  if (normalizedSource === 'qq' || normalizedSource === 'qqmusic') {
+    return 'tencent';
+  }
+  return normalizedSource || 'netease';
+};
+
+const getOnlineTrackKey = (item?: Pick<OnlineMusicSearchResult, 'id' | 'source'> | null) => {
+  if (!item?.id) {
+    return '';
+  }
+  return `${normalizeOnlineMusicSource(item.source)}:${item.id}`;
+};
 
 function App() {
   const [videoSrc, setVideoSrc] = useState<string>('');
@@ -110,6 +150,10 @@ function App() {
   const [onlineMusicSearching, setOnlineMusicSearching] = useState(false);
   const [onlineMusicError, setOnlineMusicError] = useState('');
   const [onlineMusicResults, setOnlineMusicResults] = useState<OnlineMusicSearchResult[]>([]);
+  const [onlineMusicPlaybackStatuses, setOnlineMusicPlaybackStatuses] = useState<Record<string, OnlineMusicPlaybackStatus>>({});
+  const [selectedOnlineMusicSources, setSelectedOnlineMusicSources] = useState<string[]>(
+    ONLINE_MUSIC_SOURCE_OPTIONS.map(item => item.value)
+  );
   const [currentOnlineTrackId, setCurrentOnlineTrackId] = useState<string>('');
   const [onlineMusicServiceStatus, setOnlineMusicServiceStatus] = useState<OnlineMusicServiceStatus>('stopped');
   const [onlineMusicServiceMessage, setOnlineMusicServiceMessage] = useState('在线服务已关闭');
@@ -119,6 +163,8 @@ function App() {
   const playlistRestoreCompletedRef = useRef(false);
   const onlineMusicIdleTimerRef = useRef<number | null>(null);
   const [onlineMusicInteractionTick, setOnlineMusicInteractionTick] = useState(0);
+  const onlineMusicPrecheckBatchRef = useRef(0);
+  const onlineMusicPrecheckCacheRef = useRef<Record<string, OnlineMusicPrecheckCacheEntry>>({});
 
   // 播放器方法引用
   const playPauseRef = useRef<(() => void) | null>(null);
@@ -133,6 +179,27 @@ function App() {
 
   const isOnlinePlaylistItem = useCallback((item?: Pick<PlaylistItem, 'id' | 'onlineMusic'> | null) => {
     return !!item && (item.id.startsWith('online-') || !!item.onlineMusic?.id);
+  }, []);
+
+  const getOnlinePlaylistItemId = useCallback((item: Pick<OnlineMusicSearchResult, 'id' | 'source'>) => {
+    const trackKey = getOnlineTrackKey(item);
+    return trackKey ? `online-${trackKey}` : '';
+  }, []);
+
+  const getOnlineTrackKeyFromPlaylistItem = useCallback((item?: Pick<PlaylistItem, 'id' | 'onlineMusic'> | null) => {
+    if (!item) {
+      return '';
+    }
+
+    if (item.onlineMusic?.id) {
+      return getOnlineTrackKey(item.onlineMusic);
+    }
+
+    if (item.id.startsWith('online-')) {
+      return item.id.replace(/^online-/, '');
+    }
+
+    return '';
   }, []);
 
   const createPersistedOnlinePlaylistItem = useCallback((item: PlaylistItem): PersistedPlaylistItem | null => {
@@ -469,7 +536,7 @@ function App() {
       const item = playlist[index];
       // 同步最近选择的文件，避免类型判定抖动
       lastSelectedFileRef.current = item.file;
-      setCurrentOnlineTrackId(isOnlinePlaylistItem(item) ? item.id.replace(/^online-/, '') : '');
+      setCurrentOnlineTrackId(isOnlinePlaylistItem(item) ? getOnlineTrackKeyFromPlaylistItem(item) : '');
       if (isAudioFile(item.file)) {
         setPlaylistViewMode('audio');
       }
@@ -816,35 +883,279 @@ function App() {
     return new File([], `${item.artist ? `${item.artist} - ` : ''}${item.title}.mp3`, { type: 'audio/mpeg' });
   }, []);
 
-  const resolveOnlineStreamUrl = useCallback((item: OnlineMusicSearchResult) => {
-    if (typeof item.streamUrl === 'string' && item.streamUrl.trim()) {
-      if (/^https?:\/\//i.test(item.streamUrl)) {
-        return item.streamUrl;
-      }
-      return `${onlineMusicServiceBaseUrl}${item.streamUrl.startsWith('/') ? '' : '/'}${item.streamUrl}`;
+  const buildOnlineMusicServiceUrl = useCallback((item: OnlineMusicSearchResult, endpoint: 'stream' | 'stream-info' | 'lyric' = 'stream') => {
+    const searchParams = new URLSearchParams({
+      id: item.id,
+      source: item.source || 'netease',
+    });
+    if (item.title) {
+      searchParams.set('title', item.title);
     }
-    return `${onlineMusicServiceBaseUrl}/api/music/stream?id=${encodeURIComponent(item.id)}&source=${encodeURIComponent(item.source || 'netease')}`;
+    if (item.artist) {
+      searchParams.set('artist', item.artist);
+    }
+    if (typeof item.durationMs === 'number' && Number.isFinite(item.durationMs) && item.durationMs > 0) {
+      searchParams.set('durationMs', String(Math.round(item.durationMs)));
+    }
+    return `${onlineMusicServiceBaseUrl}/api/music/${endpoint}?${searchParams.toString()}`;
   }, [onlineMusicServiceBaseUrl]);
 
-  const verifyOnlineStream = async (item: OnlineMusicSearchResult) => {
-    const response = await fetch(
-      `${onlineMusicServiceBaseUrl}/api/music/stream-info?id=${encodeURIComponent(item.id)}&source=${encodeURIComponent(item.source || 'netease')}`,
-      { cache: 'no-store' }
-    );
-    const json = await response.json().catch(() => null);
+  const resolveOnlineStreamUrl = useCallback((item: OnlineMusicSearchResult) => {
+    return buildOnlineMusicServiceUrl(item, 'stream');
+  }, [buildOnlineMusicServiceUrl]);
+
+  const fetchOnlineMusicStreamInfo = useCallback(async (item: OnlineMusicSearchResult) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), ONLINE_MUSIC_STREAM_CHECK_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(buildOnlineMusicServiceUrl(item, 'stream-info'), {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      const json = await response.json().catch(() => null);
+      return { response, json };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error('可播检测超时，请稍后重试');
+      }
+      if (error instanceof TypeError) {
+        throw new Error('在线音乐服务连接失败，请稍后重试');
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }, [buildOnlineMusicServiceUrl]);
+
+  const checkOnlineStream = useCallback(async (item: OnlineMusicSearchResult): Promise<OnlineMusicPlaybackCheckResult> => {
+    const { response, json } = await fetchOnlineMusicStreamInfo(item);
     if (!response.ok || !json?.ok) {
       const reason = typeof json?.reason === 'string' && json.reason.trim()
         ? json.reason.trim()
         : '当前音源不可播放，请尝试其他版本';
       throw new Error(reason);
     }
-  };
+
+    const resolvedTrack = json?.resolvedTrack;
+    const resolvedSource = typeof json?.resolvedSource === 'string' && json.resolvedSource.trim()
+      ? json.resolvedSource.trim()
+      : item.source;
+    const usedFallback = Boolean(json?.usedFallback);
+    if (resolvedTrack && typeof resolvedTrack === 'object') {
+      const playableItem = {
+        ...item,
+        ...resolvedTrack,
+        id: typeof resolvedTrack.id === 'string' && resolvedTrack.id.trim() ? resolvedTrack.id : item.id,
+        title: typeof resolvedTrack.title === 'string' && resolvedTrack.title.trim() ? resolvedTrack.title : item.title,
+        artist: typeof resolvedTrack.artist === 'string' && resolvedTrack.artist.trim() ? resolvedTrack.artist : item.artist,
+        source: typeof resolvedTrack.source === 'string' && resolvedTrack.source.trim() ? resolvedTrack.source : item.source,
+        sourceLabel: typeof resolvedTrack.sourceLabel === 'string' && resolvedTrack.sourceLabel.trim() ? resolvedTrack.sourceLabel : item.sourceLabel,
+        album: typeof resolvedTrack.album === 'string' && resolvedTrack.album.trim() ? resolvedTrack.album : item.album,
+        albumName: typeof resolvedTrack.albumName === 'string' && resolvedTrack.albumName.trim() ? resolvedTrack.albumName : item.albumName,
+        cover: typeof resolvedTrack.cover === 'string' && resolvedTrack.cover.trim() ? resolvedTrack.cover : item.cover,
+        pic: typeof resolvedTrack.pic === 'string' && resolvedTrack.pic.trim() ? resolvedTrack.pic : item.pic,
+        image: typeof resolvedTrack.image === 'string' && resolvedTrack.image.trim() ? resolvedTrack.image : item.image,
+        durationMs: typeof resolvedTrack.durationMs === 'number' ? resolvedTrack.durationMs : item.durationMs,
+      } satisfies OnlineMusicSearchResult;
+      return {
+        playableItem,
+        status: {
+          state: usedFallback ? 'fallback' : 'playable',
+          resolvedSource,
+          resolvedTrack: playableItem,
+        },
+      };
+    }
+
+    return {
+      playableItem: item,
+      status: {
+        state: usedFallback ? 'fallback' : 'playable',
+        resolvedSource,
+      },
+    };
+  }, [fetchOnlineMusicStreamInfo]);
+
+  const verifyOnlineStream = useCallback(async (item: OnlineMusicSearchResult) => {
+    const trackKey = getOnlineTrackKey(item);
+    const cachedEntry = onlineMusicPrecheckCacheRef.current[trackKey];
+    if (cachedEntry?.status.state === 'playable' || cachedEntry?.status.state === 'fallback') {
+      return cachedEntry.playableItem ?? cachedEntry.status.resolvedTrack ?? item;
+    }
+    if (cachedEntry?.status.state === 'unplayable') {
+      throw new Error(cachedEntry.status.reason || '当前音源不可播放，请尝试其他版本');
+    }
+
+    const cachedStatus = onlineMusicPlaybackStatuses[trackKey];
+    if (cachedStatus?.state === 'playable') {
+      return cachedStatus.resolvedTrack ?? item;
+    }
+    if (cachedStatus?.state === 'fallback' && cachedStatus.resolvedTrack) {
+      return cachedStatus.resolvedTrack;
+    }
+    if (cachedStatus?.state === 'unplayable') {
+      throw new Error(cachedStatus.reason || '当前音源不可播放，请尝试其他版本');
+    }
+
+    const result = await checkOnlineStream(item);
+    return result.playableItem;
+  }, [checkOnlineStream, onlineMusicPlaybackStatuses]);
+
+  const visibleOnlineMusicResults = useMemo(() => {
+    return onlineMusicResults.filter((item) => {
+      const status = onlineMusicPlaybackStatuses[getOnlineTrackKey(item)];
+      return status?.state === 'playable' || status?.state === 'fallback';
+    });
+  }, [onlineMusicPlaybackStatuses, onlineMusicResults]);
+
+  const onlineMusicResultsChecking = useMemo(() => {
+    if (onlineMusicResults.length === 0) {
+      return false;
+    }
+
+    return onlineMusicResults.some((item) => {
+      const status = onlineMusicPlaybackStatuses[getOnlineTrackKey(item)];
+      return !status || status.state === 'checking';
+    });
+  }, [onlineMusicPlaybackStatuses, onlineMusicResults]);
+
+  const onlineMusicEmptyStateText = useMemo(() => {
+    if (onlineMusicSearching) {
+      return '正在搜索在线音乐...';
+    }
+    if (onlineMusicResultsChecking) {
+      return '正在筛选可播放版本...';
+    }
+    if (onlineMusicResults.length > 0) {
+      return '没有可播放的搜索结果，请换个关键词再试。';
+    }
+    return '搜索后这里会显示歌曲列表';
+  }, [onlineMusicResults.length, onlineMusicResultsChecking, onlineMusicSearching]);
+
+  useEffect(() => {
+    const currentBatchId = onlineMusicPrecheckBatchRef.current + 1;
+    onlineMusicPrecheckBatchRef.current = currentBatchId;
+
+    if (onlineMusicResults.length === 0) {
+      onlineMusicPrecheckCacheRef.current = {};
+      setOnlineMusicPlaybackStatuses({});
+      return;
+    }
+
+    const targets = [...onlineMusicResults];
+    const targetKeys = targets.map(item => getOnlineTrackKey(item)).filter(Boolean);
+    const pendingTargets: OnlineMusicSearchResult[] = [];
+
+    setOnlineMusicPlaybackStatuses(prev => {
+      const next: Record<string, OnlineMusicPlaybackStatus> = {};
+      for (const item of targets) {
+        const key = getOnlineTrackKey(item);
+        if (!key) {
+          continue;
+        }
+        const cachedEntry = onlineMusicPrecheckCacheRef.current[key];
+        if (cachedEntry) {
+          next[key] = cachedEntry.status;
+          continue;
+        }
+        next[key] = prev[key] ?? { state: 'checking' };
+        pendingTargets.push(item);
+      }
+      return next;
+    });
+
+    let cancelled = false;
+
+    const runPrecheck = async () => {
+      try {
+        await ensureOnlineMusicServerStarted();
+      } catch (error) {
+        if (cancelled || onlineMusicPrecheckBatchRef.current !== currentBatchId) {
+          return;
+        }
+        const reason = error instanceof Error ? error.message : '在线音乐服务启动失败';
+        setOnlineMusicPlaybackStatuses(prev => {
+          const next = { ...prev };
+          for (const key of targetKeys) {
+            next[key] = { state: 'unplayable', reason };
+          }
+          return next;
+        });
+        return;
+      }
+
+      if (pendingTargets.length === 0) {
+        return;
+      }
+
+      const queue = [...pendingTargets];
+      const worker = async () => {
+        while (!cancelled && onlineMusicPrecheckBatchRef.current === currentBatchId && queue.length > 0) {
+          const item = queue.shift();
+          if (!item) {
+            return;
+          }
+
+          const trackKey = getOnlineTrackKey(item);
+          setOnlineMusicPlaybackStatuses(prev => ({
+            ...prev,
+            [trackKey]: prev[trackKey]?.state === 'checking' ? prev[trackKey] : { state: 'checking' },
+          }));
+
+          try {
+            const result = await checkOnlineStream(item);
+            if (cancelled || onlineMusicPrecheckBatchRef.current !== currentBatchId) {
+              return;
+            }
+            onlineMusicPrecheckCacheRef.current[trackKey] = {
+              status: result.status,
+              playableItem: result.playableItem,
+            };
+            setOnlineMusicPlaybackStatuses(prev => ({
+              ...prev,
+              [trackKey]: result.status,
+            }));
+          } catch (error) {
+            if (cancelled || onlineMusicPrecheckBatchRef.current !== currentBatchId) {
+              return;
+            }
+            const reason = error instanceof Error ? error.message : '当前音源不可播放';
+            onlineMusicPrecheckCacheRef.current[trackKey] = {
+              status: {
+                state: 'unplayable',
+                reason,
+              },
+            };
+            setOnlineMusicPlaybackStatuses(prev => ({
+              ...prev,
+              [trackKey]: {
+                state: 'unplayable',
+                reason,
+              },
+            }));
+          }
+        }
+      };
+
+      const workerCount = Math.min(ONLINE_MUSIC_PRECHECK_CONCURRENCY, Math.max(queue.length, 1));
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    };
+
+    void runPrecheck();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [checkOnlineStream, ensureOnlineMusicServerStarted, onlineMusicResults]);
 
   const createOnlinePlaylistItem = useCallback((item: OnlineMusicSearchResult): PlaylistItem => {
     const file = createOnlineFile(item);
-    const cachedLyrics = onlineLyricsCacheRef.current[item.id];
+    const trackKey = getOnlineTrackKey(item);
+    const cachedLyrics = onlineLyricsCacheRef.current[trackKey];
+    const playlistItemId = getOnlinePlaylistItemId(item);
     return {
-      id: `online-${item.id}`,
+      id: playlistItemId,
       name: `${item.title}${item.artist ? ` - ${item.artist}` : ''}`,
       url: resolveOnlineStreamUrl(item),
       file,
@@ -870,7 +1181,7 @@ function App() {
         songId: item.songId,
       },
     };
-  }, [createOnlineFile, resolveOnlineStreamUrl]);
+  }, [createOnlineFile, getOnlinePlaylistItemId, resolveOnlineStreamUrl]);
 
   const restoreLocalPlaylistItem = useCallback(async (entry: PersistedPlaylistItem): Promise<PlaylistItem | null> => {
     if (!entry.originalPath) {
@@ -903,7 +1214,7 @@ function App() {
 
     const track = entry.onlineMusic as OnlineMusicSearchResult;
     if (track.lyrics) {
-      onlineLyricsCacheRef.current[track.id] = {
+      onlineLyricsCacheRef.current[getOnlineTrackKey(track)] = {
         lyrics: track.lyrics,
         lyricsSource: track.lyricsSource,
       };
@@ -913,7 +1224,8 @@ function App() {
   }, [createOnlinePlaylistItem]);
 
   const fetchOnlineLyrics = async (item: OnlineMusicSearchResult) => {
-    const cached = onlineLyricsCacheRef.current[item.id];
+    const trackKey = getOnlineTrackKey(item);
+    const cached = onlineLyricsCacheRef.current[trackKey];
     if (cached) {
       return cached;
     }
@@ -929,19 +1241,19 @@ function App() {
       const lyrics = typeof json?.lyrics === 'string' ? json.lyrics.trim() : '';
       const lyricsSource = typeof json?.source === 'string' ? json.source.trim() : '';
       const payload = { lyrics, lyricsSource: lyricsSource || undefined };
-      onlineLyricsCacheRef.current[item.id] = payload;
+      onlineLyricsCacheRef.current[trackKey] = payload;
       return payload;
     } catch (error) {
       console.error('在线歌词获取失败:', error);
       const payload = { lyrics: '', lyricsSource: undefined };
-      onlineLyricsCacheRef.current[item.id] = payload;
+      onlineLyricsCacheRef.current[trackKey] = payload;
       return payload;
     }
   };
 
-  const updateOnlinePlaylistItemLyrics = (itemId: string, lyrics?: string, lyricsSource?: string) => {
+  const updateOnlinePlaylistItemLyrics = (trackKey: string, lyrics?: string, lyricsSource?: string) => {
     setPlaylist(prev => prev.map(entry => {
-      if (entry.id !== `online-${itemId}` || !entry.onlineMusic) {
+      if (entry.id !== `online-${trackKey}` || !entry.onlineMusic) {
         return entry;
       }
       return {
@@ -954,7 +1266,7 @@ function App() {
       };
     }));
     setStoredOnlinePlaylistItems(prev => prev.map(entry => {
-      if (entry.id !== `online-${itemId}` || !entry.onlineMusic) {
+      if (entry.id !== `online-${trackKey}` || !entry.onlineMusic) {
         return entry;
       }
       return {
@@ -974,9 +1286,21 @@ function App() {
       return;
     }
 
+    const sources = selectedOnlineMusicSources
+      .map(source => normalizeOnlineMusicSource(source))
+      .filter((source, index, array) => array.indexOf(source) === index);
+
+    if (sources.length === 0) {
+      setOnlineMusicResults([]);
+      setOnlineMusicError('请至少勾选一个搜索源。');
+      return;
+    }
+
     markOnlineMusicInteraction();
     setOnlineMusicSearching(true);
     setOnlineMusicError('');
+    onlineMusicPrecheckCacheRef.current = {};
+    setOnlineMusicPlaybackStatuses({});
     try {
       await ensureOnlineMusicServerStarted();
       const healthUrl = `${onlineMusicServiceBaseUrl}/api/music/health`;
@@ -998,7 +1322,9 @@ function App() {
         return;
       }
 
-      const response = await fetch(`${onlineMusicServiceBaseUrl}/api/music/search?keyword=${encodeURIComponent(keyword)}&source=netease`);
+      const response = await fetch(
+        `${onlineMusicServiceBaseUrl}/api/music/search?keyword=${encodeURIComponent(keyword)}&sources=${encodeURIComponent(sources.join(','))}`
+      );
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -1022,13 +1348,14 @@ function App() {
     setOnlineMusicEnabled(true);
     setPlaylistViewMode('audio');
     setAudioInfoTab('online_music');
-    setCurrentOnlineTrackId(item.id);
     setError('');
     markOnlineMusicInteraction();
 
+    let playableItem = item;
     try {
       await ensureOnlineMusicServerStarted();
-      await verifyOnlineStream(item);
+      playableItem = await verifyOnlineStream(item);
+      setCurrentOnlineTrackId(getOnlineTrackKey(playableItem));
     } catch (error) {
       console.error('在线音源预检查失败:', error);
       setCurrentOnlineTrackId('');
@@ -1036,16 +1363,17 @@ function App() {
       return;
     }
 
-    const lyricsPayload = await fetchOnlineLyrics(item);
+    const trackKey = getOnlineTrackKey(playableItem);
+    const lyricsPayload = await fetchOnlineLyrics(playableItem);
 
-    const existingIndex = playlist.findIndex(entry => entry.id === `online-${item.id}`);
+    const existingIndex = playlist.findIndex(entry => entry.id === getOnlinePlaylistItemId(playableItem));
     if (existingIndex >= 0) {
-      updateOnlinePlaylistItemLyrics(item.id, lyricsPayload.lyrics, lyricsPayload.lyricsSource);
+      updateOnlinePlaylistItemLyrics(trackKey, lyricsPayload.lyrics, lyricsPayload.lyricsSource);
       handlePlaylistItemClick(existingIndex);
       return;
     }
 
-    const nextItem = createOnlinePlaylistItem(item);
+    const nextItem = createOnlinePlaylistItem(playableItem);
     if (nextItem.onlineMusic) {
       nextItem.onlineMusic.lyrics = lyricsPayload.lyrics;
       nextItem.onlineMusic.lyricsSource = lyricsPayload.lyricsSource;
@@ -1063,18 +1391,24 @@ function App() {
     setPlaylistViewMode('audio');
     setAudioInfoTab('online_music');
     markOnlineMusicInteraction();
-    if (playlist.some(entry => entry.id === `online-${item.id}`)) {
-      return;
+    try {
+      await ensureOnlineMusicServerStarted();
+      const playableItem = await verifyOnlineStream(item);
+      if (playlist.some(entry => entry.id === getOnlinePlaylistItemId(playableItem))) {
+        return;
+      }
+      const lyricsPayload = await fetchOnlineLyrics(playableItem);
+      const nextItem = createOnlinePlaylistItem(playableItem);
+      if (nextItem.onlineMusic) {
+        nextItem.onlineMusic.lyrics = lyricsPayload.lyrics;
+        nextItem.onlineMusic.lyricsSource = lyricsPayload.lyricsSource;
+      }
+      upsertStoredOnlinePlaylistItem(nextItem);
+      setPlaylist(prev => [...prev, nextItem]);
+    } catch (error) {
+      console.error('在线音源加入播放列表失败:', error);
+      setError(error instanceof Error ? error.message : '在线音源检查失败，请稍后重试');
     }
-    await ensureOnlineMusicServerStarted();
-    const lyricsPayload = await fetchOnlineLyrics(item);
-    const nextItem = createOnlinePlaylistItem(item);
-    if (nextItem.onlineMusic) {
-      nextItem.onlineMusic.lyrics = lyricsPayload.lyrics;
-      nextItem.onlineMusic.lyricsSource = lyricsPayload.lyricsSource;
-    }
-    upsertStoredOnlinePlaylistItem(nextItem);
-    setPlaylist(prev => [...prev, nextItem]);
   };
 
   const handleToggleOnlineMusic = async () => {
@@ -1136,7 +1470,13 @@ function App() {
 
   const onlinePlaylistTrackIds = storedOnlinePlaylistItems
     .filter(item => item.id.startsWith('online-'))
-    .map(item => item.id.replace(/^online-/, ''));
+    .map(item => {
+      if (item.onlineMusic?.id) {
+        return getOnlineTrackKey(item.onlineMusic);
+      }
+      return item.id.replace(/^online-/, '');
+    })
+    .filter(Boolean);
 
   useEffect(() => {
     let cancelled = false;
@@ -1565,13 +1905,24 @@ function App() {
             audioInfoTab={audioInfoTab}
             onAudioInfoTabChange={handleAudioInfoTabChange}
             onlineMusicKeyword={onlineMusicKeyword}
+            onlineMusicSources={ONLINE_MUSIC_SOURCE_OPTIONS.map(item => ({
+              value: item.value,
+              label: item.label,
+            }))}
+            selectedOnlineMusicSources={selectedOnlineMusicSources}
+            onSelectedOnlineMusicSourcesChange={(sources) => {
+              markOnlineMusicInteraction();
+              setSelectedOnlineMusicSources(sources);
+            }}
             onOnlineMusicKeywordChange={(value) => {
               markOnlineMusicInteraction();
               setOnlineMusicKeyword(value);
             }}
             onlineMusicSearching={onlineMusicSearching}
             onlineMusicError={onlineMusicError}
-            onlineMusicResults={onlineMusicResults}
+            onlineMusicResults={visibleOnlineMusicResults}
+            onlineMusicEmptyStateText={onlineMusicEmptyStateText}
+            onlineMusicPlaybackStatuses={onlineMusicPlaybackStatuses}
             currentOnlineTrackId={currentOnlineTrackId}
             onlinePlaylistTrackIds={onlinePlaylistTrackIds}
             currentOnlineTrack={currentOnlineTrack}
@@ -1579,6 +1930,7 @@ function App() {
             onOnlineMusicPlay={handlePlayOnlineMusic}
             onOnlineMusicAddToPlaylist={handleAddOnlineMusicToPlaylist}
             onOnlineMusicInteraction={markOnlineMusicInteraction}
+            autoHideTabs={(getCurrentMediaType() === 'image') || (getCurrentMediaType() === 'video' && playerState.isPlaying)}
             onStateChange={handlePlayerStateChange}
             onError={handleError}
             onEnded={handleTrackEnded}

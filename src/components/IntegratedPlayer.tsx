@@ -22,6 +22,12 @@ interface OnlineMusicSearchResult {
   songId?: string;
 }
 
+interface OnlineMusicPlaybackStatus {
+  state: 'checking' | 'playable' | 'fallback' | 'unplayable';
+  resolvedSource?: string;
+  reason?: string;
+}
+
 interface PlayerState {
   isPlaying: boolean;
   currentTime: number;
@@ -50,10 +56,15 @@ interface IntegratedPlayerProps {
   audioInfoTab?: 'lyrics' | 'online_music';
   onAudioInfoTabChange?: (tab: 'lyrics' | 'online_music') => void;
   onlineMusicKeyword?: string;
+  onlineMusicSources?: { value: string; label: string }[];
+  selectedOnlineMusicSources?: string[];
+  onSelectedOnlineMusicSourcesChange?: (sources: string[]) => void;
   onOnlineMusicKeywordChange?: (value: string) => void;
   onlineMusicSearching?: boolean;
   onlineMusicError?: string;
   onlineMusicResults?: OnlineMusicSearchResult[];
+  onlineMusicEmptyStateText?: string;
+  onlineMusicPlaybackStatuses?: Record<string, OnlineMusicPlaybackStatus>;
   currentOnlineTrackId?: string;
   onlinePlaylistTrackIds?: string[];
   currentOnlineTrack?: {
@@ -70,6 +81,7 @@ interface IntegratedPlayerProps {
   onOnlineMusicPlay?: (item: OnlineMusicSearchResult) => void;
   onOnlineMusicAddToPlaylist?: (item: OnlineMusicSearchResult) => void;
   onOnlineMusicInteraction?: () => void;
+  autoHideTabs?: boolean;
 }
 
 const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
@@ -92,10 +104,15 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
   audioInfoTab = 'lyrics',
   onAudioInfoTabChange,
   onlineMusicKeyword = '',
+  onlineMusicSources = [],
+  selectedOnlineMusicSources = [],
+  onSelectedOnlineMusicSourcesChange,
   onOnlineMusicKeywordChange,
   onlineMusicSearching = false,
   onlineMusicError,
   onlineMusicResults = [],
+  onlineMusicEmptyStateText,
+  onlineMusicPlaybackStatuses = {},
   currentOnlineTrackId,
   onlinePlaylistTrackIds = [],
   currentOnlineTrack,
@@ -103,6 +120,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
   onOnlineMusicPlay,
   onOnlineMusicAddToPlaylist,
   onOnlineMusicInteraction,
+  autoHideTabs,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playerState, setPlayerState] = useState<PlayerState>({
@@ -395,10 +413,15 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
         audioInfoTab={audioInfoTab}
         onAudioInfoTabChange={onAudioInfoTabChange}
         onlineMusicKeyword={onlineMusicKeyword}
+        onlineMusicSources={onlineMusicSources}
+        selectedOnlineMusicSources={selectedOnlineMusicSources}
+        onSelectedOnlineMusicSourcesChange={onSelectedOnlineMusicSourcesChange}
         onOnlineMusicKeywordChange={onOnlineMusicKeywordChange}
         onlineMusicSearching={onlineMusicSearching}
         onlineMusicError={onlineMusicError}
         onlineMusicResults={onlineMusicResults}
+        onlineMusicEmptyStateText={onlineMusicEmptyStateText}
+        onlineMusicPlaybackStatuses={onlineMusicPlaybackStatuses}
         currentOnlineTrackId={currentOnlineTrackId}
         onlinePlaylistTrackIds={onlinePlaylistTrackIds}
         currentOnlineTrack={currentOnlineTrack}
@@ -406,6 +429,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
         onOnlineMusicPlay={onOnlineMusicPlay}
         onOnlineMusicAddToPlaylist={onOnlineMusicAddToPlaylist}
         onOnlineMusicInteraction={onOnlineMusicInteraction}
+        autoHideTabs={autoHideTabs}
         onStateChange={onStateChange}
         onError={onError}
         onEnded={onEnded}

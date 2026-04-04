@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import type { LyricLine } from '../utils/lyrics';
-import OnlineMusicPanel, { type OnlineMusicSearchResult } from './OnlineMusicPanel';
+import OnlineMusicPanel, { type OnlineMusicPlaybackStatus, type OnlineMusicSearchResult } from './OnlineMusicPanel';
 
 interface AudioMetadata {
   title?: string;
@@ -31,9 +31,14 @@ interface AudioInfoProps {
   activeTab?: 'lyrics' | 'online_music';
   onTabChange?: (tab: 'lyrics' | 'online_music') => void;
   onlineMusicKeyword?: string;
+  onlineMusicSources?: { value: string; label: string }[];
+  selectedOnlineMusicSources?: string[];
+  onSelectedOnlineMusicSourcesChange?: (sources: string[]) => void;
   onlineMusicSearching?: boolean;
   onlineMusicError?: string;
   onlineMusicResults?: OnlineMusicSearchResult[];
+  onlineMusicEmptyStateText?: string;
+  onlineMusicPlaybackStatuses?: Record<string, OnlineMusicPlaybackStatus>;
   currentOnlineTrackId?: string;
   onlinePlaylistTrackIds?: string[];
   onOnlineMusicKeywordChange?: (value: string) => void;
@@ -41,6 +46,7 @@ interface AudioInfoProps {
   onOnlineMusicPlay?: (item: OnlineMusicSearchResult) => void;
   onOnlineMusicAddToPlaylist?: (item: OnlineMusicSearchResult) => void;
   onOnlineMusicInteraction?: () => void;
+  autoHideTabs?: boolean;
 }
 
 const AudioInfo: React.FC<AudioInfoProps> = ({
@@ -61,9 +67,14 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   activeTab = 'lyrics',
   onTabChange,
   onlineMusicKeyword = '',
+  onlineMusicSources = [],
+  selectedOnlineMusicSources = [],
+  onSelectedOnlineMusicSourcesChange,
   onlineMusicSearching = false,
   onlineMusicError,
   onlineMusicResults = [],
+  onlineMusicEmptyStateText,
+  onlineMusicPlaybackStatuses = {},
   currentOnlineTrackId,
   onlinePlaylistTrackIds = [],
   onOnlineMusicKeywordChange,
@@ -71,11 +82,15 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   onOnlineMusicPlay,
   onOnlineMusicAddToPlaylist,
   onOnlineMusicInteraction,
+  autoHideTabs,
 }) => {
   const [displayTitle, setDisplayTitle] = useState('');
   const [displayArtist, setDisplayArtist] = useState('');
   const [displayAlbum, setDisplayAlbum] = useState('');
   const [manualSearchKeyword, setManualSearchKeyword] = useState('');
+  const [tabsVisible, setTabsVisible] = useState(true);
+  const tabsTimeoutRef = useRef<NodeJS.Timeout>();
+  const tabsMouseMoveTimeoutRef = useRef<NodeJS.Timeout>();
   const contentScrollRef = useRef<HTMLDivElement>(null);
   const currentLineRef = useRef<HTMLParagraphElement>(null);
 
@@ -136,7 +151,63 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
     }
   }, [currentLyricIndex]);
 
-  // 从文件名提取信息（增强版）
+  // 标签栏自动隐藏逻辑：当 autoHideTabs 为真时，鼠标静止5秒或离开窗口即隐藏
+  useEffect(() => {
+    if (!autoHideTabs) {
+      setTabsVisible(true);
+      if (tabsTimeoutRef.current) {
+        clearTimeout(tabsTimeoutRef.current);
+      }
+      if (tabsMouseMoveTimeoutRef.current) {
+        clearTimeout(tabsMouseMoveTimeoutRef.current);
+      }
+      return;
+    }
+
+    const handleMouseMove = () => {
+      setTabsVisible(true);
+      if (tabsTimeoutRef.current) {
+        clearTimeout(tabsTimeoutRef.current);
+      }
+      if (tabsMouseMoveTimeoutRef.current) {
+        clearTimeout(tabsMouseMoveTimeoutRef.current);
+      }
+      
+      tabsMouseMoveTimeoutRef.current = setTimeout(() => {
+        setTabsVisible(false);
+      }, 5000);
+    };
+
+    const handleMouseLeave = () => {
+      setTabsVisible(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseleave', handleMouseLeave);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseleave', handleMouseLeave);
+      if (tabsTimeoutRef.current) {
+        clearTimeout(tabsTimeoutRef.current);
+      }
+      if (tabsMouseMoveTimeoutRef.current) {
+        clearTimeout(tabsMouseMoveTimeoutRef.current);
+      }
+    };
+  }, [autoHideTabs]);
+
+  useEffect(() => {
+    if (!autoHideTabs) {
+      setTabsVisible(true);
+      if (tabsTimeoutRef.current) {
+        clearTimeout(tabsTimeoutRef.current);
+      }
+      if (tabsMouseMoveTimeoutRef.current) {
+        clearTimeout(tabsMouseMoveTimeoutRef.current);
+      }
+    }
+  }, [autoHideTabs]);
   const extractInfoFromFileName = (fileName: string) => {
     // 移除扩展名
     let nameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
@@ -305,12 +376,17 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
               <OnlineMusicPanel
                 enabled={onlineMusicEnabled}
                 keyword={onlineMusicKeyword}
+                sources={onlineMusicSources}
+                selectedSources={selectedOnlineMusicSources}
                 isSearching={onlineMusicSearching}
                 error={onlineMusicError}
                 results={onlineMusicResults}
+                emptyStateText={onlineMusicEmptyStateText}
+                playbackStatuses={onlineMusicPlaybackStatuses}
                 currentTrackId={currentOnlineTrackId}
                 playlistTrackIds={onlinePlaylistTrackIds}
                 onKeywordChange={(value) => onOnlineMusicKeywordChange?.(value)}
+                onSelectedSourcesChange={(sources) => onSelectedOnlineMusicSourcesChange?.(sources)}
                 onSearch={() => onOnlineMusicSearch?.()}
                 onPlay={(item) => onOnlineMusicPlay?.(item)}
                 onAddToPlaylist={(item) => onOnlineMusicAddToPlaylist?.(item)}
@@ -509,8 +585,11 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
         </div>
       </div>
 
-      {onlineMusicEnabled ? (
-        <div className="w-7 flex-shrink-0 border-l border-gray-700/30 bg-gray-900/40 flex flex-col">
+      {onlineMusicEnabled && tabsVisible ? (
+        <div 
+          className="w-7 flex-shrink-0 border-l border-gray-700/30 bg-gray-900/40 flex flex-col"
+          onMouseEnter={() => setTabsVisible(true)}
+        >
           <button
             type="button"
             onClick={() => onTabChange?.('lyrics')}
@@ -525,7 +604,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
             className={`flex-1 flex items-center justify-center text-xs transition-colors ${currentTab === 'online_music' ? 'bg-emerald-600 text-white' : 'text-gray-300 hover:bg-white/5'}`}
             style={{ writingMode: 'vertical-rl', textOrientation: 'upright' }}
           >
-            在线音乐
+            找歌
           </button>
         </div>
       ) : null}

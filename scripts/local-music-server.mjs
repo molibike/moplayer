@@ -1,14 +1,43 @@
 import http from 'node:http';
 import https from 'node:https';
 import { URL } from 'node:url';
+import vm from 'node:vm';
+import Meting from '@meting/core';
 
 const HOST = '127.0.0.1';
 const PORT = 31999;
 const REQUEST_TIMEOUT_MS = 15000;
 const STREAM_TIMEOUT_MS = 0;
+const STREAM_PROBE_TIMEOUT_MS = 8000;
+const FALLBACK_CANDIDATES_PER_SOURCE = 3;
 
 const normalizeText = (value) => String(value ?? '').trim();
 const METING_API_BASE = normalizeText(process.env.METING_API_BASE) || 'https://meting-api-omega.vercel.app/api';
+const SEARCH_SOURCE_ORDER = ['netease', 'tencent', 'kugou', 'kuwo'];
+const PLAYBACK_FALLBACK_ORDER = ['netease', 'kugou', 'kuwo', 'tencent'];
+const SEARCH_SOURCE_SET = new Set(SEARCH_SOURCE_ORDER);
+const metingClientCache = new Map();
+
+const normalizeSource = (value) => {
+  const source = normalizeText(value).toLowerCase();
+  if (source === 'qq' || source === 'qqmusic') {
+    return 'tencent';
+  }
+  return source || 'netease';
+};
+
+const getMetingClient = (source) => {
+  const normalizedSource = normalizeSource(source);
+  const cached = metingClientCache.get(normalizedSource);
+  if (cached) {
+    return cached;
+  }
+
+  const client = new Meting(normalizedSource);
+  client.format(true);
+  metingClientCache.set(normalizedSource, client);
+  return client;
+};
 
 const normalizeArray = (value) => {
   if (Array.isArray(value)) {
@@ -17,6 +46,10 @@ const normalizeArray = (value) => {
   const text = normalizeText(value);
   return text ? [text] : [];
 };
+
+const normalizeComparableText = (value) => normalizeText(value)
+  .toLowerCase()
+  .replace(/[^\p{L}\p{N}]+/gu, '');
 
 const parseJsonSafely = (text) => {
   const payload = normalizeText(text);
@@ -29,6 +62,42 @@ const parseJsonSafely = (text) => {
   } catch {
     return null;
   }
+};
+
+const parseMetingPayload = (payload) => {
+  if (typeof payload === 'string') {
+    return parseJsonSafely(payload);
+  }
+  return payload ?? null;
+};
+
+const requestJsonByFetch = async (inputUrl, { method = 'GET', headers = {}, body, timeoutMs = REQUEST_TIMEOUT_MS } = {}) => {
+  const response = await fetch(inputUrl, {
+    method,
+    headers,
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const payload = parseJsonSafely(text);
+  if (!payload) {
+    throw new Error('响应不是有效JSON');
+  }
+  return payload;
+};
+
+const parseLooseObjectPayload = (text) => {
+  const payload = normalizeText(text)
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#39;/gi, '\'')
+    .replace(/&#34;/gi, '"');
+  if (!payload) {
+    return null;
+  }
+  return vm.runInNewContext(`(${payload})`, Object.create(null), { timeout: 500 });
 };
 
 const requestBuffer = (inputUrl, { method = 'GET', headers = {}, timeoutMs = REQUEST_TIMEOUT_MS } = {}) => {
@@ -86,6 +155,11 @@ const requestText = async (inputUrl, options = {}, redirectCount = 0) => {
     headers: response.headers,
     text: response.body.toString('utf8'),
   };
+};
+
+const getReadableErrorMessage = (error, fallbackMessage) => {
+  const message = error instanceof Error ? normalizeText(error.message) : '';
+  return message || fallbackMessage;
 };
 
 const proxyStream = (targetUrl, req, res, { headers = {} } = {}, redirectCount = 0) => {
@@ -215,6 +289,7 @@ const probeStream = async (targetUrl, { headers = {} } = {}, redirectCount = 0) 
       ...headers,
       Range: headers.Range || 'bytes=0-4095',
     },
+    timeoutMs: STREAM_PROBE_TIMEOUT_MS,
   });
 
   const statusCode = response.statusCode;
@@ -304,20 +379,20 @@ const searchLyricsFromLrclib = async (title, artist) => {
 
 const resolveSongLyrics = async ({ id, source = 'netease', title = '', artist = '' }) => {
   try {
-    const lrcApi = `${METING_API_BASE}?server=${encodeURIComponent(source)}&type=lrc&id=${encodeURIComponent(id)}`;
-    const response = await requestText(lrcApi, {
-      headers: {
-        'User-Agent': 'MoPlayer/1.0',
-      },
-    });
-    const text = response.text;
-
-    const lyric = formatLyrics(text);
+    const client = getMetingClient(source);
+    const response = await client.lyric(id);
+    const payload = parseMetingPayload(response);
+    const lyric = formatLyrics(
+      payload?.lyric
+      ?? payload?.lrc?.lyric
+      ?? payload?.data?.lyric
+      ?? ''
+    );
     if (lyric && !lyric.includes('纯音乐')) {
       return lyric;
     }
   } catch (error) {
-    console.warn('[music-server] meting歌词获取失败:', error);
+    console.warn(`[music-server] ${normalizeSource(source)} 歌词获取失败:`, error);
   }
 
   return await searchLyricsFromLrclib(title, artist);
@@ -385,7 +460,7 @@ const normalizeDurationMs = (value) => {
 };
 
 const getSourceLabel = (source) => {
-  const normalizedSource = normalizeText(source).toLowerCase();
+  const normalizedSource = normalizeSource(source);
   switch (normalizedSource) {
     case 'netease':
       return '网易云';
@@ -415,10 +490,11 @@ const createTrackPayload = (item) => {
   const artistList = [
     ...normalizeArray(item?.artists?.map?.((entry) => entry?.name)),
     ...normalizeArray(item?.ar?.map?.((entry) => entry?.name)),
+    ...normalizeArray(item?.singer?.map?.((entry) => entry?.name)),
     ...normalizeArray(item?.artist ?? item?.author),
   ].filter((value, index, array) => array.indexOf(value) === index);
   const artist = artistList.join(' / ');
-  const source = normalizeText(item?.source ?? item?.server ?? 'netease') || 'netease';
+  const source = normalizeSource(item?.source ?? item?.server ?? 'netease');
   const album = normalizeText(item?.album ?? item?.albumname ?? item?.album?.name ?? item?.al?.name ?? item?.collection ?? '');
   const cover = normalizeText(item?.pic ?? item?.cover ?? item?.image ?? item?.album?.picUrl ?? item?.al?.picUrl ?? '');
   const url = normalizeText(item?.url ?? item?.streamUrl ?? '');
@@ -493,8 +569,84 @@ const searchTracksFromNeteaseFallback = async (keyword) => {
   })).filter(Boolean);
 };
 
+const buildTencentAlbumCover = (albumMid) => {
+  const normalizedAlbumMid = normalizeText(albumMid);
+  if (!normalizedAlbumMid) {
+    return '';
+  }
+  return `https://y.gtimg.cn/music/photo_new/T002R300x300M000${normalizedAlbumMid}.jpg?max_age=2592000`;
+};
+
+const searchTracksFromTencent = async (keyword) => {
+  const payload = await requestJsonByFetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
+    method: 'POST',
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5',
+      'Content-Type': 'application/json;charset=utf-8',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
+    },
+    body: JSON.stringify({
+      comm: { ct: '19', cv: '1859', uin: '0' },
+      req: {
+        method: 'DoSearchForQQMusicDesktop',
+        module: 'music.search.SearchCgiService',
+        param: {
+          grp: 1,
+          num_per_page: 15,
+          page_num: 1,
+          query: keyword,
+          search_type: 0,
+        },
+      },
+    }),
+  });
+
+  const items = Array.isArray(payload?.req?.data?.body?.song?.list)
+    ? payload.req.data.body.song.list
+    : [];
+
+  return items.map((item) => normalizeSearchItem({
+    id: item?.mid,
+    title: item?.title,
+    artist: Array.isArray(item?.singer) ? item.singer.map((entry) => entry?.name).filter(Boolean) : [],
+    album: item?.album?.title ?? item?.album?.name ?? '',
+    cover: buildTencentAlbumCover(item?.album?.mid ?? item?.album?.pmid),
+    duration: item?.interval,
+    source: 'tencent',
+  })).filter(Boolean);
+};
+
+const searchTracksFromKuwoLegacy = async (keyword) => {
+  const response = await requestText(
+    `http://search.kuwo.cn/r.s?all=${encodeURIComponent(keyword)}&ft=music&itemset=web_2013&client=kt&pn=0&rn=15&rformat=json&encoding=utf8`,
+    {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+      },
+    }
+  );
+
+  const payload = parseLooseObjectPayload(response.text);
+  const items = Array.isArray(payload?.abslist) ? payload.abslist : [];
+
+  return items.map((item) => normalizeSearchItem({
+    id: normalizeText(item?.DC_TARGETID ?? item?.MUSICRID).replace(/^MUSIC_/i, ''),
+    title: item?.NAME ?? item?.SONGNAME ?? '',
+    artist: item?.ARTIST ?? '',
+    album: item?.ALBUM ?? '',
+    duration: item?.DURATION ?? '',
+    source: 'kuwo',
+  })).filter(Boolean);
+};
+
 const searchTracks = async ({ keyword, source = 'netease' }) => {
-  if (source === 'netease') {
+  const normalizedSource = normalizeSource(source);
+
+  if (normalizedSource === 'netease') {
     try {
       const fallbackResults = await searchTracksFromNeteaseFallback(keyword);
       if (fallbackResults.length > 0) {
@@ -506,30 +658,373 @@ const searchTracks = async ({ keyword, source = 'netease' }) => {
     }
   }
 
-  const upstreamUrl = `${METING_API_BASE}?server=${encodeURIComponent(source)}&type=search&format=json&id=${encodeURIComponent(keyword)}`;
+  if (normalizedSource === 'tencent') {
+    try {
+      const results = await searchTracksFromTencent(keyword);
+      if (results.length > 0) {
+        return results;
+      }
+      console.warn('[music-server] QQ音乐官方搜索未返回有效结果，准备回退 meting 搜索');
+    } catch (error) {
+      console.warn('[music-server] QQ音乐官方搜索失败，准备回退 meting 搜索:', error);
+    }
+  }
+
+  if (normalizedSource === 'kuwo') {
+    try {
+      const results = await searchTracksFromKuwoLegacy(keyword);
+      if (results.length > 0) {
+        return results;
+      }
+      console.warn('[music-server] 酷我旧版搜索未返回有效结果，准备回退 meting 搜索');
+    } catch (error) {
+      console.warn('[music-server] 酷我旧版搜索失败，准备回退 meting 搜索:', error);
+    }
+  }
+
   try {
-    const response = await requestText(upstreamUrl, {
-      headers: {
-        'User-Agent': 'MoPlayer/1.0',
-      },
-    });
-    const raw = parseJsonSafely(response.text);
+    const client = getMetingClient(normalizedSource);
+    const response = await client.search(keyword, { page: 1, limit: 15 });
+    const raw = parseMetingPayload(response);
     const items = extractFallbackSongs(raw);
 
     if (items.length > 0) {
-      return items.map((item) => normalizeSearchItem(item)).filter(Boolean);
+      return items
+        .map((item) => normalizeSearchItem({
+          ...item,
+          source: item?.source ?? normalizedSource,
+        }))
+        .filter(Boolean);
     }
 
-    console.warn('[music-server] meting搜索未返回有效JSON结果，准备回退网易云搜索');
+    console.warn(`[music-server] ${normalizedSource} 搜索未返回有效结果`);
   } catch (error) {
-    console.warn('[music-server] meting搜索失败，准备回退网易云搜索:', error);
+    console.warn(`[music-server] ${normalizedSource} 搜索失败:`, error);
   }
 
   return [];
 };
 
+const searchTracksAcrossSources = async ({ keyword, sources }) => {
+  const sourceResults = new Map();
+  const errors = {};
+  const results = await Promise.all(
+    sources.map(async (source) => {
+      try {
+        return {
+          source,
+          results: await searchTracks({ keyword, source }),
+          error: '',
+        };
+      } catch (error) {
+        return {
+          source,
+          results: [],
+          error: getReadableErrorMessage(error, '搜索失败'),
+        };
+      }
+    })
+  );
+
+  for (const entry of results) {
+    sourceResults.set(entry.source, entry.results);
+    if (entry.error) {
+      errors[entry.source] = entry.error;
+    }
+  }
+
+  const uniqueResults = new Map();
+  const maxLength = Math.max(0, ...sources.map((source) => sourceResults.get(source)?.length || 0));
+  for (let index = 0; index < maxLength; index += 1) {
+    for (const source of sources) {
+      const item = sourceResults.get(source)?.[index];
+      if (!item) {
+        continue;
+      }
+      const resultKey = `${normalizeSource(item.source)}:${item.id}`;
+      if (!uniqueResults.has(resultKey)) {
+        uniqueResults.set(resultKey, item);
+      }
+    }
+  }
+
+  return {
+    results: [...uniqueResults.values()],
+    errors,
+  };
+};
+
+const getRequestedSources = (searchParams) => {
+  const sourceParams = [
+    ...searchParams.getAll('sources').flatMap((value) => value.split(',')),
+    ...searchParams.getAll('source').flatMap((value) => value.split(',')),
+  ]
+    .map((value) => normalizeSource(value))
+    .filter((value) => value === 'all' || SEARCH_SOURCE_SET.has(value));
+
+  if (sourceParams.includes('all')) {
+    return [...SEARCH_SOURCE_ORDER];
+  }
+
+  const uniqueSources = sourceParams.filter((value, index, array) => array.indexOf(value) === index);
+  return uniqueSources.length > 0 ? uniqueSources : [...SEARCH_SOURCE_ORDER];
+};
+
+const scoreTrackMatch = (item, { title = '', artist = '', durationMs } = {}) => {
+  const normalizedTitle = normalizeComparableText(title);
+  const normalizedArtist = normalizeComparableText(artist);
+  const itemTitle = normalizeComparableText(item?.title ?? item?.name ?? '');
+  const itemArtist = normalizeComparableText(item?.artist ?? item?.artistList?.join(' ') ?? '');
+  const targetDurationMs = normalizeDurationMs(durationMs);
+  const itemDurationMs = normalizeDurationMs(item?.durationMs);
+  const durationGapMs = targetDurationMs && itemDurationMs
+    ? Math.abs(targetDurationMs - itemDurationMs)
+    : Number.POSITIVE_INFINITY;
+  const titleExact = Boolean(normalizedTitle && itemTitle === normalizedTitle);
+  const titlePartial = !titleExact && Boolean(
+    normalizedTitle
+    && itemTitle
+    && (itemTitle.includes(normalizedTitle) || normalizedTitle.includes(itemTitle))
+  );
+  const artistExact = Boolean(normalizedArtist && itemArtist === normalizedArtist);
+  const artistPartial = !artistExact && Boolean(
+    normalizedArtist
+    && itemArtist
+    && (itemArtist.includes(normalizedArtist) || normalizedArtist.includes(itemArtist))
+  );
+
+  let score = 0;
+  if (titleExact) {
+    score += 12;
+  } else if (titlePartial) {
+    score += 6;
+  }
+
+  if (artistExact) {
+    score += 8;
+  } else if (artistPartial) {
+    score += 4;
+  }
+
+  if (Number.isFinite(durationGapMs)) {
+    if (durationGapMs <= 2000) {
+      score += 4;
+    } else if (durationGapMs <= 5000) {
+      score += 2;
+    } else if (durationGapMs >= 20000) {
+      score -= 2;
+    }
+  }
+
+  return {
+    score,
+    durationGapMs,
+    titleMatched: titleExact || titlePartial,
+    titleExact,
+    artistMatched: artistExact || artistPartial,
+    artistExact,
+  };
+};
+
+const compareTrackMatch = (left, right) => {
+  if (left.titleExact !== right.titleExact) {
+    return left.titleExact ? -1 : 1;
+  }
+  if (left.artistExact !== right.artistExact) {
+    return left.artistExact ? -1 : 1;
+  }
+  if (left.titleMatched !== right.titleMatched) {
+    return left.titleMatched ? -1 : 1;
+  }
+  if (left.artistMatched !== right.artistMatched) {
+    return left.artistMatched ? -1 : 1;
+  }
+  if (left.score !== right.score) {
+    return right.score - left.score;
+  }
+  if (left.durationGapMs !== right.durationGapMs) {
+    return left.durationGapMs - right.durationGapMs;
+  }
+  return 0;
+};
+
+const findBestFallbackTracks = (results, { title = '', artist = '', durationMs, excludeKeys = new Set() } = {}) => {
+  return [...results]
+    .filter((item) => !excludeKeys.has(`${normalizeSource(item?.source)}:${normalizeText(item?.id)}`))
+    .map((item) => ({
+      candidate: item,
+      match: scoreTrackMatch(item, { title, artist, durationMs }),
+    }))
+    .filter((entry) => {
+      if (!title) {
+        return true;
+      }
+      return entry.match.titleMatched;
+    })
+    .sort((left, right) => compareTrackMatch(left.match, right.match))
+    .slice(0, FALLBACK_CANDIDATES_PER_SOURCE);
+};
+
+const resolveTencentTrackUrl = async (id) => {
+  const songMid = normalizeText(id);
+  const variants = [
+    { prefix: 'M500', suffix: 'mp3' },
+    { prefix: 'C400', suffix: 'm4a' },
+    { prefix: 'M800', suffix: 'mp3' },
+  ];
+
+  for (const variant of variants) {
+    const payload = await requestJsonByFetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'content-type': 'application/json;charset=UTF-8',
+      },
+      body: JSON.stringify({
+        req_1: {
+          module: 'vkey.GetVkeyServer',
+          method: 'CgiGetVkey',
+          param: {
+            filename: [`${variant.prefix}${songMid}${songMid}.${variant.suffix}`],
+            guid: '10000',
+            songmid: [songMid],
+            songtype: [0],
+            uin: '0',
+            loginflag: 1,
+            platform: '20',
+          },
+        },
+        loginUin: '0',
+        comm: {
+          uin: '0',
+          format: 'json',
+          ct: 24,
+          cv: 0,
+        },
+      }),
+    });
+
+    const baseUrl = normalizeText(payload?.req_1?.data?.sip?.[0]);
+    const purl = normalizeText(payload?.req_1?.data?.midurlinfo?.[0]?.purl);
+    if (baseUrl && purl) {
+      return `${baseUrl}${purl}`;
+    }
+  }
+
+  throw new Error('QQ音乐当前歌曲暂不可播放');
+};
+
+const resolveTrackWithFallback = async ({ id, source = 'netease', title = '', artist = '', durationMs } = {}) => {
+  const normalizedSource = normalizeSource(source);
+  const attemptedTrackKeys = new Set([`${normalizedSource}:${normalizeText(id)}`]);
+  let originalError = null;
+
+  try {
+    return {
+      url: await resolveTrackUrl(id, normalizedSource),
+      resolvedTrack: null,
+      resolvedSource: normalizedSource,
+      usedFallback: false,
+    };
+  } catch (error) {
+    originalError = error;
+  }
+
+  const fallbackKeyword = `${normalizeText(title)} ${normalizeText(artist)}`.trim();
+  if (!fallbackKeyword) {
+    throw originalError;
+  }
+
+  const fallbackSources = PLAYBACK_FALLBACK_ORDER.filter((fallbackSource) => fallbackSource !== normalizedSource);
+  const fallbackSearchResults = await Promise.allSettled(
+    fallbackSources.map(async (fallbackSource) => ({
+      source: fallbackSource,
+      results: await searchTracks({ keyword: fallbackKeyword, source: fallbackSource }),
+    }))
+  );
+
+  const fallbackCandidates = [];
+  for (const entry of fallbackSearchResults) {
+    if (entry.status !== 'fulfilled') {
+      continue;
+    }
+
+    const fallbackSource = entry.value.source;
+    const rankedTracks = findBestFallbackTracks(entry.value.results, {
+      title,
+      artist,
+      durationMs,
+      excludeKeys: attemptedTrackKeys,
+    });
+
+    fallbackCandidates.push(
+      ...rankedTracks.map(({ candidate, match }, index) => ({
+        candidate,
+        match,
+        sourcePriority: PLAYBACK_FALLBACK_ORDER.indexOf(fallbackSource),
+        index,
+      }))
+    );
+  }
+
+  fallbackCandidates.sort((left, right) => {
+    const matchOrder = compareTrackMatch(left.match, right.match);
+    if (matchOrder !== 0) {
+      return matchOrder;
+    }
+    if (left.sourcePriority !== right.sourcePriority) {
+      return left.sourcePriority - right.sourcePriority;
+    }
+    return left.index - right.index;
+  });
+
+  for (const entry of fallbackCandidates) {
+    const candidate = entry.candidate;
+    attemptedTrackKeys.add(`${normalizeSource(candidate.source)}:${normalizeText(candidate.id)}`);
+    try {
+      return {
+        url: await resolveTrackUrl(candidate.id, candidate.source),
+        resolvedTrack: candidate,
+        resolvedSource: normalizeSource(candidate.source),
+        usedFallback: true,
+      };
+    } catch (error) {
+      originalError = error;
+    }
+  }
+
+  throw originalError ?? new Error('当前来源暂未获取到可用播放地址');
+};
+
 const resolveTrackUrl = async (id, source = 'netease') => {
-  return `${METING_API_BASE}?server=${encodeURIComponent(source)}&type=url&id=${encodeURIComponent(id)}`;
+  const normalizedSource = normalizeSource(source);
+
+  if (normalizedSource === 'tencent') {
+    return await resolveTencentTrackUrl(id);
+  }
+
+  try {
+    const client = getMetingClient(normalizedSource);
+    const response = await client.url(id, 320);
+    const payload = parseMetingPayload(response);
+    const directUrl = normalizeText(
+      payload?.url
+      ?? payload?.data?.url
+      ?? (Array.isArray(payload) ? payload[0]?.url : '')
+    );
+    if (directUrl) {
+      return directUrl;
+    }
+  } catch (error) {
+    console.warn(`[music-server] ${normalizedSource} 获取播放地址失败:`, error);
+  }
+
+  if (normalizedSource === 'netease') {
+    return `${METING_API_BASE}?server=${encodeURIComponent(normalizedSource)}&type=url&id=${encodeURIComponent(id)}`;
+  }
+
+  throw new Error('当前来源暂未获取到可用播放地址');
 };
 
 const server = http.createServer(async (req, res) => {
@@ -550,21 +1045,39 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === 'GET' && requestUrl.pathname === '/api/music/health') {
-      writeJson(res, 200, { ok: true, port: PORT, endpoints: ['/api/music/health', '/api/music/search', '/api/music/song', '/api/music/lyric', '/api/music/stream', '/api/music/stream-info'] });
+      writeJson(res, 200, {
+        ok: true,
+        port: PORT,
+        supportedSources: SEARCH_SOURCE_ORDER,
+        endpoints: ['/api/music/health', '/api/music/search', '/api/music/song', '/api/music/lyric', '/api/music/stream', '/api/music/stream-info'],
+      });
       return;
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/music/search') {
       const keyword = requestUrl.searchParams.get('keyword')?.trim() || '';
-      const source = requestUrl.searchParams.get('source')?.trim() || 'netease';
+      const sources = getRequestedSources(requestUrl.searchParams);
 
       if (!keyword) {
         writeJson(res, 400, { message: '缺少搜索关键词' });
         return;
       }
 
-      const results = await searchTracks({ keyword, source });
-      writeJson(res, 200, { results, data: results, total: results.length, keyword, source });
+      if (sources.length === 0) {
+        writeJson(res, 400, { message: '缺少有效搜索源' });
+        return;
+      }
+
+      const { results, errors } = await searchTracksAcrossSources({ keyword, sources });
+      writeJson(res, 200, {
+        results,
+        data: results,
+        total: results.length,
+        keyword,
+        source: sources[0] || 'netease',
+        sources,
+        errors,
+      });
       return;
     }
 
@@ -624,13 +1137,26 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && requestUrl.pathname === '/api/music/stream') {
       const id = requestUrl.searchParams.get('id')?.trim() || '';
       const source = requestUrl.searchParams.get('source')?.trim() || 'netease';
+      const title = requestUrl.searchParams.get('title')?.trim() || '';
+      const artist = requestUrl.searchParams.get('artist')?.trim() || '';
+      const durationMs = normalizeDurationMs(requestUrl.searchParams.get('durationMs'));
 
       if (!id) {
         writeJson(res, 400, { message: '缺少歌曲ID' });
         return;
       }
 
-      const targetUrl = await resolveTrackUrl(id, source);
+      let targetUrl = '';
+      try {
+        const resolved = await resolveTrackWithFallback({ id, source, title, artist, durationMs });
+        targetUrl = resolved.url;
+      } catch (error) {
+        writeJson(res, 422, {
+          ok: false,
+          message: getReadableErrorMessage(error, '当前音源暂不可播放'),
+        });
+        return;
+      }
       const headers = {
         'User-Agent': 'MoPlayer/1.0',
       };
@@ -646,18 +1172,50 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && requestUrl.pathname === '/api/music/stream-info') {
       const id = requestUrl.searchParams.get('id')?.trim() || '';
       const source = requestUrl.searchParams.get('source')?.trim() || 'netease';
+      const title = requestUrl.searchParams.get('title')?.trim() || '';
+      const artist = requestUrl.searchParams.get('artist')?.trim() || '';
+      const durationMs = normalizeDurationMs(requestUrl.searchParams.get('durationMs'));
 
       if (!id) {
         writeJson(res, 400, { ok: false, message: '缺少歌曲ID' });
         return;
       }
 
-      const targetUrl = await resolveTrackUrl(id, source);
-      const probe = await probeStream(targetUrl, {
-        headers: {
-          'User-Agent': 'MoPlayer/1.0',
-        },
-      });
+      let targetUrl = '';
+      let resolved = null;
+      try {
+        resolved = await resolveTrackWithFallback({ id, source, title, artist, durationMs });
+        targetUrl = resolved.url;
+      } catch (error) {
+        writeJson(res, 422, {
+          ok: false,
+          statusCode: 422,
+          contentType: '',
+          contentLength: '',
+          reason: getReadableErrorMessage(error, '当前音源暂不可播放'),
+        });
+        return;
+      }
+      let probe = null;
+      try {
+        probe = await probeStream(targetUrl, {
+          headers: {
+            'User-Agent': 'MoPlayer/1.0',
+          },
+        });
+      } catch (error) {
+        writeJson(res, 422, {
+          ok: false,
+          statusCode: 422,
+          contentType: '',
+          contentLength: '',
+          reason: getReadableErrorMessage(error, '音源探测失败，请稍后重试'),
+          resolvedSource: resolved?.resolvedSource,
+          usedFallback: !!resolved?.usedFallback,
+          resolvedTrack: resolved?.resolvedTrack ?? null,
+        });
+        return;
+      }
 
       writeJson(res, probe.ok ? 200 : 422, {
         ok: probe.ok,
@@ -665,6 +1223,9 @@ const server = http.createServer(async (req, res) => {
         contentType: probe.contentType,
         contentLength: probe.contentLength,
         reason: probe.reason,
+        resolvedSource: resolved?.resolvedSource,
+        usedFallback: !!resolved?.usedFallback,
+        resolvedTrack: resolved?.resolvedTrack ?? null,
       });
       return;
     }
