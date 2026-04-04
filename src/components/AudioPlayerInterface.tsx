@@ -8,10 +8,6 @@ import { parseLyrics } from '../utils/lyrics';
 
 import { invoke } from '@tauri-apps/api/core';
 
-// 导入 Buffer polyfill
-import { Buffer } from 'buffer';
-globalThis.Buffer = Buffer;
-
 interface LyricsCandidate {
   source: string;
   title: string;
@@ -37,6 +33,26 @@ interface AudioMetadata {
   lyricsSource?: string;
 }
 
+interface OnlineMusicSearchResult {
+  id: string;
+  title: string;
+  name?: string;
+  artist: string;
+  artists?: string[];
+  artistList?: string[];
+  album?: string;
+  albumName?: string;
+  cover?: string;
+  pic?: string;
+  image?: string;
+  durationMs?: number;
+  source: string;
+  sourceLabel?: string;
+  streamUrl?: string;
+  lyricUrl?: string;
+  songId?: string;
+}
+
 interface AudioPlayerInterfaceProps {
   src: string;
   fileName: string;
@@ -52,16 +68,40 @@ interface AudioPlayerInterfaceProps {
   onSeekBackward?: React.MutableRefObject<(() => void) | null>;
   onSeekTo?: React.MutableRefObject<((time: number) => void) | null>;
   onEnded?: () => void;
+  onlineMusicEnabled?: boolean;
+  audioInfoTab?: 'lyrics' | 'online_music';
+  onAudioInfoTabChange?: (tab: 'lyrics' | 'online_music') => void;
+  onlineMusicKeyword?: string;
+  onOnlineMusicKeywordChange?: (value: string) => void;
+  onlineMusicSearching?: boolean;
+  onlineMusicError?: string;
+  onlineMusicResults?: OnlineMusicSearchResult[];
+  currentOnlineTrackId?: string;
+  onlinePlaylistTrackIds?: string[];
+  currentOnlineTrack?: {
+    id: string;
+    title: string;
+    artist: string;
+    album?: string;
+    cover?: string;
+    lyrics?: string;
+    lyricsSource?: string;
+    source: string;
+  };
+  onOnlineMusicSearch?: () => void;
+  onOnlineMusicPlay?: (item: OnlineMusicSearchResult) => void;
+  onOnlineMusicAddToPlaylist?: (item: OnlineMusicSearchResult) => void;
+  onOnlineMusicInteraction?: () => void;
 }
 
 type LyricsSearchStatus = 'idle' | 'searching' | 'success' | 'failed' | 'not_found';
 
-const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({ 
-  src, 
+const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
+  src,
   fileName,
   fileBlob,
   filePath,
-  onStateChange, 
+  onStateChange,
   onError,
   onPlayPause: externalPlayPause,
   onVolumeUp: externalVolumeUp,
@@ -71,9 +111,25 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   onSeekBackward: externalSeekBackward,
   onSeekTo: externalSeekTo,
   onEnded,
+  onlineMusicEnabled = false,
+  audioInfoTab = 'lyrics',
+  onAudioInfoTabChange,
+  onlineMusicKeyword = '',
+  onOnlineMusicKeywordChange,
+  onlineMusicSearching = false,
+  onlineMusicError,
+  onlineMusicResults = [],
+  currentOnlineTrackId,
+  onlinePlaylistTrackIds = [],
+  currentOnlineTrack,
+  onOnlineMusicSearch,
+  onOnlineMusicPlay,
+  onOnlineMusicAddToPlaylist,
+  onOnlineMusicInteraction,
 }) => {
   const middleButtonRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const hasAudioSource = typeof src === 'string' && src.trim().length > 0;
   const [playerState, setPlayerState] = useState<PlayerState>({
     isPlaying: false,
     currentTime: 0,
@@ -171,7 +227,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     return value
       .replace(/^\d{2,4}\s*版/g, '')
       .replace(/^\d{2,4}年?版/g, '')
-      .replace(/(主题曲|片头曲|片尾曲|插曲|原声版|电视剧版|电影版|现场版|Live版|完整版|超清版|高清版)/gi, '')
+      .replace(/(主题曲|片头曲|片尾曲|插曲|原声版|电视剧版|电影版|现场版|完整版|超清版|高清版)/gi, '')
       .replace(/[“”"'《》「」『』]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
@@ -304,8 +360,46 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       });
   }, [applyLyricsCandidate, searchLyricsCandidatesWithBackend]);
 
+  const applyOnlineTrackMetadata = useCallback((track: NonNullable<AudioPlayerInterfaceProps['currentOnlineTrack']>) => {
+    if (coverBlobUrlRef.current) {
+      URL.revokeObjectURL(coverBlobUrlRef.current);
+      coverBlobUrlRef.current = null;
+    }
+
+    applyMetadata({
+      title: track.title || '未知歌曲',
+      artist: track.artist || '未知艺术家',
+      album: track.album || '未知专辑',
+      coverImage: track.cover,
+      lyrics: track.lyrics || '',
+      lyricsSource: track.lyricsSource,
+    });
+
+    if (track.lyrics?.trim()) {
+      setLyricsCandidates([
+        {
+          source: track.lyricsSource || '在线歌词',
+          title: track.title || '未知歌曲',
+          artist: track.artist || '未知艺术家',
+          lyrics: track.lyrics,
+        },
+      ]);
+      setCurrentLyricsIndex(0);
+      setIsSearchingLyrics(false);
+    } else if (track.title) {
+      setLyricsCandidates([]);
+      setCurrentLyricsIndex(0);
+      updateLyricsFromBackend(track.title, track.artist || '');
+    }
+  }, [applyMetadata, updateLyricsFromBackend]);
+
   const extractMetadata = useCallback(async (audio: HTMLAudioElement) => {
     try {
+      if (currentOnlineTrack) {
+        applyOnlineTrackMetadata(currentOnlineTrack);
+        return;
+      }
+
       const currentFileName = fileNameRef.current;
       const currentFileBlob = fileBlobRef.current;
       const fileNameInfo = extractInfoFromFileName(currentFileName);
@@ -416,11 +510,16 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
         lyricsSource: undefined,
       });
     }
-  }, [applyMetadata, extractInfoFromFileName, isLikelySuspiciousArtist, isLikelySuspiciousTitle, loadLocalLyrics, normalizeTitleForSearch, updateLyricsFromBackend]);
+  }, [applyMetadata, applyOnlineTrackMetadata, currentOnlineTrack, extractInfoFromFileName, isLikelySuspiciousArtist, isLikelySuspiciousTitle, loadLocalLyrics, normalizeTitleForSearch, updateLyricsFromBackend]);
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !src) return;
+    if (!audio) return;
+
+    if (!hasAudioSource) {
+      setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0, duration: 0 }));
+      return;
+    }
 
     metadataExtractedSrcRef.current = '';
     lastTimeUpdateRef.current = 0;
@@ -468,7 +567,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       audio.removeEventListener('loadstart', handleLoadStart);
       audio.removeEventListener('canplay', handleCanPlay);
     };
-  }, [src]);
+  }, [src, hasAudioSource]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -498,6 +597,9 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     const handleVolumeChange = () => updateState({ volume: audio.volume, muted: audio.muted });
     const handleEnded = () => onEndedRef.current?.();
     const handleError = () => {
+      if (!hasAudioSource) {
+        return;
+      }
       const error = audio.error;
       let errorMessage = '未知错误';
       if (error) {
@@ -549,7 +651,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       audio.removeEventListener('error', handleError);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [extractMetadata, isDragging]);
+  }, [extractMetadata, hasAudioSource, isDragging]);
 
   useEffect(() => {
     return () => {
@@ -563,6 +665,9 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   const handlePlayPause = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    if (!hasAudioSource) return;
+    const currentSrc = (audio.currentSrc || '').trim();
+    if (!currentSrc) return;
 
     if (!audio.paused) {
       audio.pause();
@@ -571,7 +676,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
         onErrorRef.current?.('播放失败: ' + err.message);
       });
     }
-  }, []);
+  }, [hasAudioSource]);
 
   const handleVolumeUp = useCallback(() => {
     const audio = audioRef.current;
@@ -701,11 +806,16 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
   return (
     <div className="relative flex-1 flex w-full h-full border-5 border-gray-700"
          style={{ border: '5px solid #374151' }}
-         onClick={handlePlayPause}>
+         onClick={() => {
+           if (hasAudioSource) {
+             handlePlayPause();
+           }
+         }}>
       <audio
         ref={audioRef}
-        src={src}
-        preload="metadata"
+        src={hasAudioSource ? src : undefined}
+        preload={hasAudioSource ? 'metadata' : 'none'}
+        crossOrigin="anonymous"
         style={{ display: 'none' }}
       />
 
@@ -732,6 +842,20 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
             fileName={fileName}
             metadata={metadata}
             currentTime={playerState.currentTime}
+            onlineMusicEnabled={onlineMusicEnabled}
+            activeTab={audioInfoTab}
+            onTabChange={onAudioInfoTabChange}
+            onlineMusicKeyword={onlineMusicKeyword}
+            onlineMusicSearching={onlineMusicSearching}
+            onlineMusicError={onlineMusicError}
+            onlineMusicResults={onlineMusicResults}
+            currentOnlineTrackId={currentOnlineTrackId}
+            onlinePlaylistTrackIds={onlinePlaylistTrackIds}
+            onOnlineMusicKeywordChange={onOnlineMusicKeywordChange}
+            onOnlineMusicSearch={onOnlineMusicSearch}
+            onOnlineMusicPlay={onOnlineMusicPlay}
+            onOnlineMusicAddToPlaylist={onOnlineMusicAddToPlaylist}
+            onOnlineMusicInteraction={onOnlineMusicInteraction}
             onSearchLyrics={handleSearchLyrics}
             onSearchKeywordChange={handleLyricsSearchKeywordChange}
             onSwitchLyrics={handleSwitchLyrics}

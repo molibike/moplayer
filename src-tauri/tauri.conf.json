@@ -4,7 +4,7 @@
   "identifier": "com.moplayer.desktop",
   "build": {
     "beforeBuildCommand": "npm run build",
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:all",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173"
   },
@@ -70,7 +70,9 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": [
+      "../scripts/local-music-server.mjs"
+    ],
     "externalBin": [],
     "copyright": "Copyright © 2024 MoPlayer Team",
     "shortDescription": "高性能音视频播放器",

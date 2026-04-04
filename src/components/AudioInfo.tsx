@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import type { LyricLine } from '../utils/lyrics';
+import OnlineMusicPanel, { type OnlineMusicSearchResult } from './OnlineMusicPanel';
 
 interface AudioMetadata {
   title?: string;
@@ -26,11 +27,25 @@ interface AudioInfoProps {
   hasLyricsCandidates?: boolean;
   currentLyricsIndex?: number;
   lyricsCandidateCount?: number;
+  onlineMusicEnabled?: boolean;
+  activeTab?: 'lyrics' | 'online_music';
+  onTabChange?: (tab: 'lyrics' | 'online_music') => void;
+  onlineMusicKeyword?: string;
+  onlineMusicSearching?: boolean;
+  onlineMusicError?: string;
+  onlineMusicResults?: OnlineMusicSearchResult[];
+  currentOnlineTrackId?: string;
+  onlinePlaylistTrackIds?: string[];
+  onOnlineMusicKeywordChange?: (value: string) => void;
+  onOnlineMusicSearch?: () => void;
+  onOnlineMusicPlay?: (item: OnlineMusicSearchResult) => void;
+  onOnlineMusicAddToPlaylist?: (item: OnlineMusicSearchResult) => void;
+  onOnlineMusicInteraction?: () => void;
 }
 
-const AudioInfo: React.FC<AudioInfoProps> = ({ 
-  fileName, 
-  metadata, 
+const AudioInfo: React.FC<AudioInfoProps> = ({
+  fileName,
+  metadata,
   currentTime,
   onSearchLyrics,
   onSearchKeywordChange,
@@ -41,9 +56,22 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   isSavingLyrics,
   hasLyricsCandidates,
   currentLyricsIndex,
-  lyricsCandidateCount
+  lyricsCandidateCount,
+  onlineMusicEnabled = false,
+  activeTab = 'lyrics',
+  onTabChange,
+  onlineMusicKeyword = '',
+  onlineMusicSearching = false,
+  onlineMusicError,
+  onlineMusicResults = [],
+  currentOnlineTrackId,
+  onlinePlaylistTrackIds = [],
+  onOnlineMusicKeywordChange,
+  onOnlineMusicSearch,
+  onOnlineMusicPlay,
+  onOnlineMusicAddToPlaylist,
+  onOnlineMusicInteraction,
 }) => {
-
   const [displayTitle, setDisplayTitle] = useState('');
   const [displayArtist, setDisplayArtist] = useState('');
   const [displayAlbum, setDisplayAlbum] = useState('');
@@ -53,8 +81,8 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
 
   // 获取歌词行（带时间戳）
   const lyricsWithTime = useMemo(() => {
-    return metadata?.lyricsLines && metadata.lyricsLines.length > 0 
-      ? metadata.lyricsLines 
+    return metadata?.lyricsLines && metadata.lyricsLines.length > 0
+      ? metadata.lyricsLines
       : [];
   }, [metadata?.lyricsLines]);
 
@@ -64,12 +92,13 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
 
     return metadata.lyrics
       .split(/\r?\n/)
-      .map(line => line.trim())
+      .map((line) => line.trim())
       .filter(Boolean);
   }, [lyricsWithTime.length, metadata?.lyrics]);
 
   const hasAnyLyrics = !!metadata?.lyrics?.trim();
   const canSwitchLyrics = !!hasLyricsCandidates;
+  const currentTab = onlineMusicEnabled ? activeTab : 'lyrics';
 
   // 计算当前应该高亮的歌词索引
   const currentLyricIndex = useMemo(() => {
@@ -102,7 +131,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
 
       container.scrollTo({
         top: Math.max(0, scrollTarget),
-        behavior: 'smooth'
+        behavior: 'smooth',
       });
     }
   }, [currentLyricIndex]);
@@ -111,7 +140,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   const extractInfoFromFileName = (fileName: string) => {
     // 移除扩展名
     let nameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
-    
+
     // 清理常见噪声
     nameWithoutExt = nameWithoutExt
       // 去除序号前缀："01. "、"01-"、"01_"、"01 "、"【01】"
@@ -129,7 +158,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
     if (parts.length >= 2) {
       return {
         artist: parts[0].trim(),
-        title: parts.slice(1).join(' - ').trim()
+        title: parts.slice(1).join(' - ').trim(),
       };
     }
 
@@ -138,14 +167,14 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
     if (reverseParts.length === 2) {
       return {
         artist: reverseParts[1].trim(),
-        title: reverseParts[0].trim()
+        title: reverseParts[0].trim(),
       };
     }
 
     // 默认：整个文件名作为歌名
     return {
       title: nameWithoutExt,
-      artist: '未知艺术家'
+      artist: '未知艺术家',
     };
   };
 
@@ -225,12 +254,11 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
 
   return (
     <div
-      className="flex flex-col h-full p-6 bg-gradient-to-br from-gray-900 to-gray-800 text-white"
+      className="flex h-full bg-gradient-to-br from-gray-900 to-gray-800 text-white"
       onClick={(event) => event.stopPropagation()}
     >
-      {/* 音频信息与歌词统一滚动区域 */}
-      <div ref={contentScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden auto-hide-scrollbar">
-        <div className="flex flex-col items-center text-center" style={{ paddingTop: '0.25rem', paddingBottom: '3rem' }}>
+      <div ref={contentScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden auto-hide-scrollbar px-3 pb-3">
+        <div className="flex flex-col items-center text-center" style={{ paddingTop: '0.25rem', paddingBottom: '1.25rem' }}>
           {/* 歌曲标题 */}
           <div
             style={{
@@ -249,7 +277,9 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
               width: '100%',
             }}
           >
-            <p className="text-gray-300 mb-1" style={{ fontSize: headerCollapsed ? 'clamp(0.82rem, 1.8vw, 0.95rem)' : 'clamp(1rem, 2.5vw, 1.25rem)' }}>艺术家</p>
+            <p className="text-gray-300 mb-1" style={{ fontSize: headerCollapsed ? 'clamp(0.82rem, 1.8vw, 0.95rem)' : 'clamp(1rem, 2.5vw, 1.25rem)' }}>
+              艺术家
+            </p>
             <p className="font-semibold text-blue-400" style={{ fontSize: headerCollapsed ? 'clamp(1rem, 2.2vw, 1.15rem)' : 'clamp(1.25rem, 3vw, 1.5rem)' }}>
               {displayArtist}
             </p>
@@ -262,14 +292,35 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
               width: '100%',
             }}
           >
-            <p className="text-gray-400 mb-1" style={{ fontSize: headerCollapsed ? 'clamp(0.78rem, 1.7vw, 0.88rem)' : 'clamp(0.875rem, 2vw, 1.125rem)' }}>专辑</p>
+            <p className="text-gray-400 mb-1" style={{ fontSize: headerCollapsed ? 'clamp(0.78rem, 1.7vw, 0.88rem)' : 'clamp(0.875rem, 2vw, 1.125rem)' }}>
+              专辑
+            </p>
             <p className="text-gray-200" style={{ fontSize: headerCollapsed ? 'clamp(0.92rem, 2vw, 1rem)' : 'clamp(1.125rem, 2.5vw, 1.25rem)' }}>
               {displayAlbum}
             </p>
           </div>
 
+          {currentTab === 'online_music' ? (
+            <div className="w-full mt-3">
+              <OnlineMusicPanel
+                enabled={onlineMusicEnabled}
+                keyword={onlineMusicKeyword}
+                isSearching={onlineMusicSearching}
+                error={onlineMusicError}
+                results={onlineMusicResults}
+                currentTrackId={currentOnlineTrackId}
+                playlistTrackIds={onlinePlaylistTrackIds}
+                onKeywordChange={(value) => onOnlineMusicKeywordChange?.(value)}
+                onSearch={() => onOnlineMusicSearch?.()}
+                onPlay={(item) => onOnlineMusicPlay?.(item)}
+                onAddToPlaylist={(item) => onOnlineMusicAddToPlaylist?.(item)}
+                onInteraction={() => onOnlineMusicInteraction?.()}
+              />
+            </div>
+          ) : null}
+
           {/* 歌词操作区 */}
-          {hasAnyLyrics ? (
+          {currentTab === 'lyrics' && hasAnyLyrics ? (
             <div className="w-full flex flex-col items-center gap-3" style={{ marginTop: headerCollapsed ? '0.75rem' : '1.25rem' }}>
               <div className="w-full flex flex-wrap items-center justify-center gap-3">
                 <button
@@ -279,11 +330,14 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                   style={{
                     padding: '0.35rem 0.7rem',
                     minHeight: '2rem',
-                    fontSize: 'clamp(0.58rem, 1.26vw, 0.67rem)'
+                    fontSize: 'clamp(0.58rem, 1.26vw, 0.67rem)',
                   }}
                   title={canSwitchLyrics ? '切换到下一份候选歌词' : '当前没有更多候选歌词'}
                 >
-                  换一份歌词 {typeof currentLyricsIndex === 'number' && typeof lyricsCandidateCount === 'number' && lyricsCandidateCount > 0 ? `(${currentLyricsIndex + 1}/${lyricsCandidateCount})` : ''}
+                  换一份歌词{' '}
+                  {typeof currentLyricsIndex === 'number' && typeof lyricsCandidateCount === 'number' && lyricsCandidateCount > 0
+                    ? `(${currentLyricsIndex + 1}/${lyricsCandidateCount})`
+                    : ''}
                 </button>
                 <button
                   onClick={onSaveLyrics}
@@ -292,7 +346,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                   style={{
                     padding: '0.35rem 0.7rem',
                     minHeight: '2rem',
-                    fontSize: 'clamp(0.58rem, 1.26vw, 0.67rem)'
+                    fontSize: 'clamp(0.58rem, 1.26vw, 0.67rem)',
                   }}
                 >
                   {isSavingLyrics ? '保存中...' : '下载到本地'}
@@ -303,7 +357,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                   </span>
                 ) : null}
               </div>
-              <div className="relative z-10 w-full flex flex-col items-center gap-2" style={{ maxWidth: '34rem' }}>
+              <div className="relative z-10 w-full flex flex-col items-center gap-2">
                 <input
                   type="text"
                   value={manualSearchKeyword}
@@ -320,7 +374,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                   className="w-full bg-gray-800/85 border border-gray-600 text-white rounded-lg outline-none focus:border-blue-400"
                   style={{
                     padding: '0.55rem 0.8rem',
-                    fontSize: 'clamp(0.8rem, 1.7vw, 0.92rem)'
+                    fontSize: 'clamp(0.8rem, 1.7vw, 0.92rem)',
                   }}
                 />
                 <button
@@ -345,8 +399,8 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
             </div>
           ) : null}
 
-          {(lyricsWithTime.length > 0 || plainLyricsLines.length > 0) ? (
-            <div className="w-full" style={{ maxWidth: '92%', marginTop: headerCollapsed ? '0.4rem' : '1.5rem', paddingBottom: '40vh' }}>
+          {currentTab === 'lyrics' && (lyricsWithTime.length > 0 || plainLyricsLines.length > 0) ? (
+            <div className="w-full" style={{ marginTop: headerCollapsed ? '0.35rem' : '0.75rem', paddingBottom: '1.25rem' }}>
               {lyricsWithTime.length > 0 ? (
                 lyricsWithTime.map((line, index) => {
                   const isCurrent = index === currentLyricIndex;
@@ -362,15 +416,15 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                         isCurrent
                           ? 'text-white font-bold'
                           : isPast
-                            ? 'text-gray-500'
-                            : 'text-gray-400'
+                          ? 'text-gray-500'
+                          : 'text-gray-400'
                       }`}
                       style={{
                         fontSize: 'clamp(0.98rem, 2.1vw, 1.15rem)',
                         lineHeight: 1.8,
                         marginTop: index === 0 ? '0' : '0.28rem',
                         opacity: lineOpacity,
-                        filter: 'none'
+                        filter: 'none',
                       }}
                     >
                       {line.text}
@@ -387,7 +441,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                       lineHeight: 1.8,
                       marginTop: index === 0 ? '0' : '0.28rem',
                       opacity: 0.92,
-                      filter: 'none'
+                      filter: 'none',
                     }}
                   >
                     {line}
@@ -395,13 +449,13 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                 ))
               )}
             </div>
-          ) : (
+          ) : currentTab === 'lyrics' ? (
             /* 无歌词时显示搜索按钮 */
             <div className="w-full flex flex-col items-center" style={{ marginTop: '2rem' }}>
               <p className="text-gray-500 mb-3" style={{ fontSize: 'clamp(0.9rem, 2vw, 1.1rem)' }}>
                 暂无歌词
               </p>
-              <div className="relative z-10 w-full flex flex-col items-center gap-3" style={{ maxWidth: '34rem' }}>
+              <div className="relative z-10 w-full flex flex-col items-center gap-3">
                 <input
                   type="text"
                   value={manualSearchKeyword}
@@ -418,7 +472,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                   className="w-full bg-gray-800/90 border border-gray-600 text-white rounded-lg outline-none focus:border-blue-400"
                   style={{
                     padding: '0.7rem 0.9rem',
-                    fontSize: 'clamp(0.88rem, 1.9vw, 1rem)'
+                    fontSize: 'clamp(0.88rem, 1.9vw, 1rem)',
                   }}
                 />
                 <button
@@ -451,9 +505,30 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                 ) : null}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
+
+      {onlineMusicEnabled ? (
+        <div className="w-7 flex-shrink-0 border-l border-gray-700/30 bg-gray-900/40 flex flex-col">
+          <button
+            type="button"
+            onClick={() => onTabChange?.('lyrics')}
+            className={`flex-1 flex items-center justify-center text-xs transition-colors ${currentTab === 'lyrics' ? 'bg-emerald-600 text-white' : 'text-gray-300 hover:bg-white/5'}`}
+            style={{ writingMode: 'vertical-rl', textOrientation: 'upright' }}
+          >
+            歌词
+          </button>
+          <button
+            type="button"
+            onClick={() => onTabChange?.('online_music')}
+            className={`flex-1 flex items-center justify-center text-xs transition-colors ${currentTab === 'online_music' ? 'bg-emerald-600 text-white' : 'text-gray-300 hover:bg-white/5'}`}
+            style={{ writingMode: 'vertical-rl', textOrientation: 'upright' }}
+          >
+            在线音乐
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 };

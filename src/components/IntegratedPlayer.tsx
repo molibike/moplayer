@@ -2,6 +2,26 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import AudioPlayerInterface from './AudioPlayerInterface';
 import ImageViewer from './ImageViewer';
 
+interface OnlineMusicSearchResult {
+  id: string;
+  title: string;
+  name?: string;
+  artist: string;
+  artists?: string[];
+  artistList?: string[];
+  album?: string;
+  albumName?: string;
+  cover?: string;
+  pic?: string;
+  image?: string;
+  durationMs?: number;
+  source: string;
+  sourceLabel?: string;
+  streamUrl?: string;
+  lyricUrl?: string;
+  songId?: string;
+}
+
 interface PlayerState {
   isPlaying: boolean;
   currentTime: number;
@@ -25,14 +45,39 @@ interface IntegratedPlayerProps {
   onSeekForward?: React.MutableRefObject<(() => void) | null>;
   onSeekBackward?: React.MutableRefObject<(() => void) | null>;
   onSeekTo?: React.MutableRefObject<((time: number) => void) | null>;
+  forceAudioMode?: boolean;
+  onlineMusicEnabled?: boolean;
+  audioInfoTab?: 'lyrics' | 'online_music';
+  onAudioInfoTabChange?: (tab: 'lyrics' | 'online_music') => void;
+  onlineMusicKeyword?: string;
+  onOnlineMusicKeywordChange?: (value: string) => void;
+  onlineMusicSearching?: boolean;
+  onlineMusicError?: string;
+  onlineMusicResults?: OnlineMusicSearchResult[];
+  currentOnlineTrackId?: string;
+  onlinePlaylistTrackIds?: string[];
+  currentOnlineTrack?: {
+    id: string;
+    title: string;
+    artist: string;
+    album?: string;
+    cover?: string;
+    lyrics?: string;
+    lyricsSource?: string;
+    source: string;
+  };
+  onOnlineMusicSearch?: () => void;
+  onOnlineMusicPlay?: (item: OnlineMusicSearchResult) => void;
+  onOnlineMusicAddToPlaylist?: (item: OnlineMusicSearchResult) => void;
+  onOnlineMusicInteraction?: () => void;
 }
 
-const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({ 
-  src, 
+const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
+  src,
   fileName,
   fileBlob,
   filePath,
-  onStateChange, 
+  onStateChange,
   onError,
   onPlayPause: externalPlayPause,
   onVolumeUp: externalVolumeUp,
@@ -42,6 +87,22 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
   onSeekBackward: externalSeekBackward,
   onSeekTo: externalSeekTo,
   onEnded,
+  forceAudioMode = false,
+  onlineMusicEnabled = false,
+  audioInfoTab = 'lyrics',
+  onAudioInfoTabChange,
+  onlineMusicKeyword = '',
+  onOnlineMusicKeywordChange,
+  onlineMusicSearching = false,
+  onlineMusicError,
+  onlineMusicResults = [],
+  currentOnlineTrackId,
+  onlinePlaylistTrackIds = [],
+  currentOnlineTrack,
+  onOnlineMusicSearch,
+  onOnlineMusicPlay,
+  onOnlineMusicAddToPlaylist,
+  onOnlineMusicInteraction,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playerState, setPlayerState] = useState<PlayerState>({
@@ -126,7 +187,7 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
   };
 
   // 判断当前文件类型
-  const isAudio = isAudioFile(src, fileName, fileBlob);
+  const isAudio = forceAudioMode || isAudioFile(src, fileName, fileBlob);
   const isImage = isImageFile(src, fileName, fileBlob);
   const isPdf = isPdfFile(src, fileName, fileBlob);
 
@@ -176,7 +237,6 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
       video.removeEventListener('loadstart', handleLoadStart);
     };
   }, [src]);
-
 
   useEffect(() => {
     const video = videoRef.current;
@@ -328,9 +388,24 @@ const IntegratedPlayer: React.FC<IntegratedPlayerProps> = ({
     return (
       <AudioPlayerInterface
         src={src}
-        fileName={fileName || '未知文件'}
+        fileName={fileName || '在线音乐'}
         fileBlob={fileBlob}
         filePath={filePath}
+        onlineMusicEnabled={onlineMusicEnabled}
+        audioInfoTab={audioInfoTab}
+        onAudioInfoTabChange={onAudioInfoTabChange}
+        onlineMusicKeyword={onlineMusicKeyword}
+        onOnlineMusicKeywordChange={onOnlineMusicKeywordChange}
+        onlineMusicSearching={onlineMusicSearching}
+        onlineMusicError={onlineMusicError}
+        onlineMusicResults={onlineMusicResults}
+        currentOnlineTrackId={currentOnlineTrackId}
+        onlinePlaylistTrackIds={onlinePlaylistTrackIds}
+        currentOnlineTrack={currentOnlineTrack}
+        onOnlineMusicSearch={onOnlineMusicSearch}
+        onOnlineMusicPlay={onOnlineMusicPlay}
+        onOnlineMusicAddToPlaylist={onOnlineMusicAddToPlaylist}
+        onOnlineMusicInteraction={onOnlineMusicInteraction}
         onStateChange={onStateChange}
         onError={onError}
         onEnded={onEnded}

@@ -8,6 +8,8 @@ interface MenuBarProps {
   onExit: () => void;
   isPlaying?: boolean; // 兼容旧逻辑
   autoHide?: boolean;  // 新增：图片/视频模式下均可自动隐藏
+  onlineMusicEnabled?: boolean;
+  onToggleOnlineMusic?: () => void;
 }
 
 interface MenuItem {
@@ -24,7 +26,7 @@ interface SeparatorItem {
   separator: true;
 }
 
-const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlaying = false, autoHide = false }) => {
+const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlaying = false, autoHide = false, onlineMusicEnabled = false, onToggleOnlineMusic }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(true);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -270,6 +272,15 @@ const MenuBar: React.FC<MenuBarProps> = ({ onOpenFile, onExit: _onExit, isPlayin
           <div className="px-2 md:px-4 truncate">
             <span className="text-sm font-semibold text-gray-200 truncate">MoPlayer</span>
           </div>
+          <button
+            className={`ml-1 px-3 py-1 text-xs rounded-full border transition-colors ${onlineMusicEnabled ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200' : 'border-gray-600 bg-gray-800/60 text-gray-300 hover:bg-gray-700/70'}`}
+            onClick={onToggleOnlineMusic}
+            onMouseEnter={() => setIsVisible(true)}
+            data-prevent-drag
+            title={onlineMusicEnabled ? '关闭在线音乐' : '打开在线音乐'}
+          >
+            在线音乐 {onlineMusicEnabled ? '开' : '关'}
+          </button>
           <div className="flex items-center space-x-1 flex-shrink min-w-0">
             {menuItems.map((menu) => (
             <div key={menu.key} className="relative">

@@ -25,9 +25,65 @@ interface PlaylistItem {
   url: string;
   file: File;
   originalPath?: string;
+  onlineMusic?: {
+    id: string;
+    title: string;
+    artist: string;
+    artists?: string[];
+    artistList?: string[];
+    album?: string;
+    albumName?: string;
+    cover?: string;
+    pic?: string;
+    image?: string;
+    durationMs?: number;
+    lyrics?: string;
+    lyricsSource?: string;
+    source: string;
+    sourceLabel?: string;
+    streamUrl?: string;
+    lyricUrl?: string;
+    songId?: string;
+  };
 }
 
 type PlayMode = 'sequential' | 'single' | 'list' | 'random';
+
+interface OnlineMusicSearchResult {
+  id: string;
+  title: string;
+  name?: string;
+  artist: string;
+  artists?: string[];
+  artistList?: string[];
+  album?: string;
+  albumName?: string;
+  cover?: string;
+  pic?: string;
+  image?: string;
+  durationMs?: number;
+  source: string;
+  sourceLabel?: string;
+  streamUrl?: string;
+  lyricUrl?: string;
+  songId?: string;
+  lyrics?: string;
+  lyricsSource?: string;
+}
+
+interface PersistedPlaylistItem {
+  id: string;
+  name: string;
+  originalPath?: string;
+  onlineMusic?: PlaylistItem['onlineMusic'];
+}
+
+interface PersistedPlaylistState {
+  items: PersistedPlaylistItem[];
+  currentItemId?: string;
+}
+
+const PLAYLIST_STORAGE_KEY = 'moplayer:playlist:v1';
 
 function App() {
   const [videoSrc, setVideoSrc] = useState<string>('');
@@ -47,6 +103,19 @@ function App() {
   const [directoryMode, setDirectoryMode] = useState<boolean>(true);
   const [dirPlaylist, setDirPlaylist] = useState<string[]>([]);
   const [dirCurrentIndex, setDirCurrentIndex] = useState<number>(-1);
+  const [onlineMusicEnabled, setOnlineMusicEnabled] = useState(false);
+  const [audioInfoTab, setAudioInfoTab] = useState<'lyrics' | 'online_music'>('lyrics');
+  const [onlineMusicKeyword, setOnlineMusicKeyword] = useState('');
+  const [onlineMusicSearching, setOnlineMusicSearching] = useState(false);
+  const [onlineMusicError, setOnlineMusicError] = useState('');
+  const [onlineMusicResults, setOnlineMusicResults] = useState<OnlineMusicSearchResult[]>([]);
+  const [currentOnlineTrackId, setCurrentOnlineTrackId] = useState<string>('');
+  const [storedOnlinePlaylistItems, setStoredOnlinePlaylistItems] = useState<PersistedPlaylistItem[]>([]);
+  const onlineMusicServiceBaseUrl = 'http://127.0.0.1:31999';
+  const onlineLyricsCacheRef = useRef<Record<string, { lyrics: string; lyricsSource?: string }>>({});
+  const playlistRestoreCompletedRef = useRef(false);
+  const onlineMusicIdleTimerRef = useRef<number | null>(null);
+  const [onlineMusicInteractionTick, setOnlineMusicInteractionTick] = useState(0);
 
   // 播放器方法引用
   const playPauseRef = useRef<(() => void) | null>(null);
@@ -58,6 +127,39 @@ function App() {
   const seekToRef = useRef<((time: number) => void) | null>(null);
   // 记录最近选择的文件，用于解决首次渲染时播放列表索引尚未更新导致的类型误判
   const lastSelectedFileRef = useRef<File | null>(null);
+
+  const isOnlinePlaylistItem = useCallback((item?: Pick<PlaylistItem, 'id' | 'onlineMusic'> | null) => {
+    return !!item && (item.id.startsWith('online-') || !!item.onlineMusic?.id);
+  }, []);
+
+  const createPersistedOnlinePlaylistItem = useCallback((item: PlaylistItem): PersistedPlaylistItem | null => {
+    if (!item.onlineMusic?.id) {
+      return null;
+    }
+
+    return {
+      id: item.id,
+      name: item.name,
+      onlineMusic: item.onlineMusic,
+    };
+  }, []);
+
+  const upsertStoredOnlinePlaylistItem = useCallback((item: PlaylistItem) => {
+    const persistedItem = createPersistedOnlinePlaylistItem(item);
+    if (!persistedItem) {
+      return;
+    }
+
+    setStoredOnlinePlaylistItems(prev => {
+      const index = prev.findIndex(entry => entry.id === persistedItem.id);
+      if (index >= 0) {
+        const next = [...prev];
+        next[index] = persistedItem;
+        return next;
+      }
+      return [...prev, persistedItem];
+    });
+  }, [createPersistedOnlinePlaylistItem]);
 
   // 切歌结束回调，根据播放模式决定下一首
   const handleTrackEnded = () => {
@@ -250,7 +352,9 @@ function App() {
   const handleFileSelect = async (file: File) => {
     try {
       setError('');
-      // 先记录最近选择的文件，避免初次渲染时索引未更新导致类型判定失败
+      setAudioInfoTab('lyrics');
+      setCurrentOnlineTrackId('');
+      // 先记录最近选择的文件，避免初次渲染时索引未更新导致的类型判定失败
       lastSelectedFileRef.current = file;
       const url = URL.createObjectURL(file);
       setVideoSrc(url);
@@ -362,6 +466,10 @@ function App() {
       const item = playlist[index];
       // 同步最近选择的文件，避免类型判定抖动
       lastSelectedFileRef.current = item.file;
+      setCurrentOnlineTrackId(isOnlinePlaylistItem(item) ? item.id.replace(/^online-/, '') : '');
+      if (isAudioFile(item.file)) {
+        setPlaylistViewMode('audio');
+      }
       setVideoSrc(item.url);
       setCurrentPlaylistIndex(index);
       // 重置播放状态，让IntegratedPlayer自动处理播放
@@ -371,13 +479,18 @@ function App() {
 
   // 删除播放列表项
   const handlePlaylistItemRemove = (index: number) => {
+    const itemToRemove = playlist[index];
     if (index === currentPlaylistIndex) {
       // 如果删除的是当前播放项，停止播放
       setVideoSrc('');
       setCurrentPlaylistIndex(-1);
+      setCurrentOnlineTrackId('');
     }
     
     setPlaylist(prev => prev.filter((_, i) => i !== index));
+    if (isOnlinePlaylistItem(itemToRemove)) {
+      setStoredOnlinePlaylistItems(prev => prev.filter(entry => entry.id !== itemToRemove.id));
+    }
     
     // 调整当前索引
     if (index < currentPlaylistIndex) {
@@ -397,6 +510,14 @@ function App() {
     const [movedItem] = newPlaylist.splice(fromIndex, 1);
     newPlaylist.splice(toIndex, 0, movedItem);
     setPlaylist(newPlaylist);
+    if (newPlaylist.some(item => isOnlinePlaylistItem(item))) {
+      setStoredOnlinePlaylistItems(() => {
+        return newPlaylist
+          .filter(item => isOnlinePlaylistItem(item))
+          .map(item => createPersistedOnlinePlaylistItem(item))
+          .filter((item): item is PersistedPlaylistItem => !!item);
+      });
+    }
     
     // 调整当前索引
     if (fromIndex === currentPlaylistIndex) {
@@ -430,6 +551,9 @@ function App() {
   };
 
   const getCurrentMediaType = () => {
+    if (!videoSrc && onlineMusicEnabled) {
+      return 'audio';
+    }
     if (currentPlaylistIndex < 0 || currentPlaylistIndex >= playlist.length) {
       return 'unknown';
     }
@@ -451,10 +575,15 @@ function App() {
       return { filteredPlaylist: playlist, originalIndexMap: new Map(), currentFilteredIndex: currentPlaylistIndex };
     }
 
+    const currentItem = currentPlaylistIndex >= 0 && currentPlaylistIndex < playlist.length
+      ? playlist[currentPlaylistIndex]
+      : undefined;
+    const currentAudioListIsOnline = currentItem ? isOnlinePlaylistItem(currentItem) : false;
+
     // 过滤播放列表
     const filteredPlaylist = playlist.filter(item => {
       if (currentMediaType === 'audio') {
-        return isAudioFile(item.file);
+        return isAudioFile(item.file) && isOnlinePlaylistItem(item) === currentAudioListIsOnline;
       } else if (currentMediaType === 'video') {
         return isVideoFile(item.file);
       } else if (currentMediaType === 'image') {
@@ -469,7 +598,7 @@ function App() {
     playlist.forEach((item, originalIndex) => {
       let isMatch = false;
       if (currentMediaType === 'audio') {
-        isMatch = isAudioFile(item.file);
+        isMatch = isAudioFile(item.file) && isOnlinePlaylistItem(item) === currentAudioListIsOnline;
       } else if (currentMediaType === 'video') {
         isMatch = isVideoFile(item.file);
       } else if (currentMediaType === 'image') {
@@ -624,8 +753,477 @@ function App() {
   };
 
   const handlePlayerStateChange = useCallback((newState: Partial<PlayerState>) => {
+    if (newState.isPlaying || (typeof newState.duration === 'number' && newState.duration > 0)) {
+      setError('');
+    }
     setPlayerState(prev => ({ ...prev, ...newState }));
   }, []);
+
+  const markOnlineMusicInteraction = useCallback(() => {
+    setOnlineMusicInteractionTick(value => value + 1);
+  }, []);
+
+  const handleAudioInfoTabChange = useCallback((tab: 'lyrics' | 'online_music') => {
+    setAudioInfoTab(tab);
+    if (tab === 'online_music') {
+      markOnlineMusicInteraction();
+    }
+  }, [markOnlineMusicInteraction]);
+
+  const createOnlineFile = useCallback((item: OnlineMusicSearchResult) => {
+    return new File([], `${item.artist ? `${item.artist} - ` : ''}${item.title}.mp3`, { type: 'audio/mpeg' });
+  }, []);
+
+  const resolveOnlineStreamUrl = useCallback((item: OnlineMusicSearchResult) => {
+    if (typeof item.streamUrl === 'string' && item.streamUrl.trim()) {
+      if (/^https?:\/\//i.test(item.streamUrl)) {
+        return item.streamUrl;
+      }
+      return `${onlineMusicServiceBaseUrl}${item.streamUrl.startsWith('/') ? '' : '/'}${item.streamUrl}`;
+    }
+    return `${onlineMusicServiceBaseUrl}/api/music/stream?id=${encodeURIComponent(item.id)}&source=${encodeURIComponent(item.source || 'netease')}`;
+  }, [onlineMusicServiceBaseUrl]);
+
+  const verifyOnlineStream = async (item: OnlineMusicSearchResult) => {
+    const response = await fetch(
+      `${onlineMusicServiceBaseUrl}/api/music/stream-info?id=${encodeURIComponent(item.id)}&source=${encodeURIComponent(item.source || 'netease')}`,
+      { cache: 'no-store' }
+    );
+    const json = await response.json().catch(() => null);
+    if (!response.ok || !json?.ok) {
+      const reason = typeof json?.reason === 'string' && json.reason.trim()
+        ? json.reason.trim()
+        : '当前音源不可播放，请尝试其他版本';
+      throw new Error(reason);
+    }
+  };
+
+  const createOnlinePlaylistItem = useCallback((item: OnlineMusicSearchResult): PlaylistItem => {
+    const file = createOnlineFile(item);
+    const cachedLyrics = onlineLyricsCacheRef.current[item.id];
+    return {
+      id: `online-${item.id}`,
+      name: `${item.title}${item.artist ? ` - ${item.artist}` : ''}`,
+      url: resolveOnlineStreamUrl(item),
+      file,
+      originalPath: undefined,
+      onlineMusic: {
+        id: item.id,
+        title: item.title,
+        artist: item.artist,
+        artists: item.artists,
+        artistList: item.artistList,
+        album: item.album,
+        albumName: item.albumName,
+        cover: item.cover,
+        pic: item.pic,
+        image: item.image,
+        durationMs: item.durationMs,
+        lyrics: cachedLyrics?.lyrics,
+        lyricsSource: cachedLyrics?.lyricsSource,
+        source: item.source,
+        sourceLabel: item.sourceLabel,
+        streamUrl: item.streamUrl,
+        lyricUrl: item.lyricUrl,
+        songId: item.songId,
+      },
+    };
+  }, [createOnlineFile, resolveOnlineStreamUrl]);
+
+  const restoreLocalPlaylistItem = useCallback(async (entry: PersistedPlaylistItem): Promise<PlaylistItem | null> => {
+    if (!entry.originalPath) {
+      return null;
+    }
+
+    try {
+      const bytes = await readFile(entry.originalPath);
+      const mime = guessMimeType(entry.originalPath);
+      const fallbackName = entry.originalPath.replace(/\\/g, '/').split('/').pop() || '未命名文件';
+      const file = new File([bytes], entry.name || fallbackName, { type: mime });
+      (file as any).path = entry.originalPath;
+      return {
+        id: entry.id,
+        name: entry.name || file.name,
+        url: URL.createObjectURL(file),
+        file,
+        originalPath: entry.originalPath,
+      };
+    } catch (error) {
+      console.warn('恢复本地播放列表项失败:', entry.originalPath, error);
+      return null;
+    }
+  }, []);
+
+  const restoreOnlinePlaylistItem = useCallback((entry: PersistedPlaylistItem): PlaylistItem | null => {
+    if (!entry.onlineMusic?.id || !entry.onlineMusic.title) {
+      return null;
+    }
+
+    const track = entry.onlineMusic as OnlineMusicSearchResult;
+    if (track.lyrics) {
+      onlineLyricsCacheRef.current[track.id] = {
+        lyrics: track.lyrics,
+        lyricsSource: track.lyricsSource,
+      };
+    }
+
+    return createOnlinePlaylistItem(track);
+  }, [createOnlinePlaylistItem]);
+
+  const fetchOnlineLyrics = async (item: OnlineMusicSearchResult) => {
+    const cached = onlineLyricsCacheRef.current[item.id];
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      const response = await fetch(
+        `${onlineMusicServiceBaseUrl}/api/music/lyric?id=${encodeURIComponent(item.id)}&source=${encodeURIComponent(item.source || 'netease')}&title=${encodeURIComponent(item.title || '')}&artist=${encodeURIComponent(item.artist || '')}`
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const json = await response.json();
+      const lyrics = typeof json?.lyrics === 'string' ? json.lyrics.trim() : '';
+      const lyricsSource = typeof json?.source === 'string' ? json.source.trim() : '';
+      const payload = { lyrics, lyricsSource: lyricsSource || undefined };
+      onlineLyricsCacheRef.current[item.id] = payload;
+      return payload;
+    } catch (error) {
+      console.error('在线歌词获取失败:', error);
+      const payload = { lyrics: '', lyricsSource: undefined };
+      onlineLyricsCacheRef.current[item.id] = payload;
+      return payload;
+    }
+  };
+
+  const updateOnlinePlaylistItemLyrics = (itemId: string, lyrics?: string, lyricsSource?: string) => {
+    setPlaylist(prev => prev.map(entry => {
+      if (entry.id !== `online-${itemId}` || !entry.onlineMusic) {
+        return entry;
+      }
+      return {
+        ...entry,
+        onlineMusic: {
+          ...entry.onlineMusic,
+          lyrics,
+          lyricsSource,
+        },
+      };
+    }));
+    setStoredOnlinePlaylistItems(prev => prev.map(entry => {
+      if (entry.id !== `online-${itemId}` || !entry.onlineMusic) {
+        return entry;
+      }
+      return {
+        ...entry,
+        onlineMusic: {
+          ...entry.onlineMusic,
+          lyrics,
+          lyricsSource,
+        },
+      };
+    }));
+  };
+
+  const handleSearchOnlineMusic = async () => {
+    const keyword = onlineMusicKeyword.trim();
+    if (!keyword || onlineMusicSearching) {
+      return;
+    }
+
+    markOnlineMusicInteraction();
+    setOnlineMusicSearching(true);
+    setOnlineMusicError('');
+    try {
+      const healthUrl = `${onlineMusicServiceBaseUrl}/api/music/health`;
+      let healthOk = false;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const healthResp = await fetch(healthUrl, { cache: 'no-store' });
+          if (healthResp.ok) {
+            healthOk = true;
+            break;
+          }
+        } catch {}
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+
+      if (!healthOk) {
+        setOnlineMusicResults([]);
+        setOnlineMusicError('在线音乐服务未启动或启动失败，请稍后重试。');
+        return;
+      }
+
+      const response = await fetch(`${onlineMusicServiceBaseUrl}/api/music/search?keyword=${encodeURIComponent(keyword)}&source=netease`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const json = await response.json();
+      const results = Array.isArray(json?.results) ? json.results as OnlineMusicSearchResult[] : [];
+
+      setOnlineMusicResults(results);
+      if (results.length === 0) {
+        setOnlineMusicError('没有搜索到匹配歌曲，请换个关键词再试。');
+      }
+    } catch (err) {
+      console.error('在线音乐搜索失败:', err);
+      setOnlineMusicResults([]);
+      setOnlineMusicError('在线音乐搜索失败，请稍后重试。');
+    } finally {
+      setOnlineMusicSearching(false);
+    }
+  };
+
+  const handlePlayOnlineMusic = async (item: OnlineMusicSearchResult) => {
+    setOnlineMusicEnabled(true);
+    setPlaylistViewMode('audio');
+    setAudioInfoTab('online_music');
+    setCurrentOnlineTrackId(item.id);
+    setError('');
+    markOnlineMusicInteraction();
+
+    try {
+      await verifyOnlineStream(item);
+    } catch (error) {
+      console.error('在线音源预检查失败:', error);
+      setCurrentOnlineTrackId('');
+      setError(error instanceof Error ? error.message : '在线音源检查失败，请稍后重试');
+      return;
+    }
+
+    const lyricsPayload = await fetchOnlineLyrics(item);
+
+    const existingIndex = playlist.findIndex(entry => entry.id === `online-${item.id}`);
+    if (existingIndex >= 0) {
+      updateOnlinePlaylistItemLyrics(item.id, lyricsPayload.lyrics, lyricsPayload.lyricsSource);
+      handlePlaylistItemClick(existingIndex);
+      return;
+    }
+
+    const nextItem = createOnlinePlaylistItem(item);
+    if (nextItem.onlineMusic) {
+      nextItem.onlineMusic.lyrics = lyricsPayload.lyrics;
+      nextItem.onlineMusic.lyricsSource = lyricsPayload.lyricsSource;
+    }
+    upsertStoredOnlinePlaylistItem(nextItem);
+    lastSelectedFileRef.current = nextItem.file;
+    setPlaylist(prev => [...prev, nextItem]);
+    setCurrentPlaylistIndex(playlist.length);
+    setVideoSrc(nextItem.url);
+    setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0 }));
+  };
+
+  const handleAddOnlineMusicToPlaylist = async (item: OnlineMusicSearchResult) => {
+    setOnlineMusicEnabled(true);
+    setPlaylistViewMode('audio');
+    setAudioInfoTab('online_music');
+    markOnlineMusicInteraction();
+    if (playlist.some(entry => entry.id === `online-${item.id}`)) {
+      return;
+    }
+    const lyricsPayload = await fetchOnlineLyrics(item);
+    const nextItem = createOnlinePlaylistItem(item);
+    if (nextItem.onlineMusic) {
+      nextItem.onlineMusic.lyrics = lyricsPayload.lyrics;
+      nextItem.onlineMusic.lyricsSource = lyricsPayload.lyricsSource;
+    }
+    upsertStoredOnlinePlaylistItem(nextItem);
+    setPlaylist(prev => [...prev, nextItem]);
+  };
+
+  const handleToggleOnlineMusic = () => {
+    const next = !onlineMusicEnabled;
+    setOnlineMusicEnabled(next);
+
+    if (next) {
+      const currentItem = currentPlaylistIndex >= 0 ? playlist[currentPlaylistIndex] : undefined;
+      const currentIsAudio = currentItem ? isAudioFile(currentItem.file) : false;
+      setPlaylistViewMode('audio');
+      handleAudioInfoTabChange('online_music');
+      setError('');
+      if (!currentIsAudio) {
+        lastSelectedFileRef.current = null;
+        setVideoSrc('');
+        setCurrentPlaylistIndex(-1);
+        setPlayerState(state => ({ ...state, isPlaying: false, currentTime: 0, duration: 0 }));
+      }
+      return;
+    }
+
+    const currentItem = currentPlaylistIndex >= 0 ? playlist[currentPlaylistIndex] : undefined;
+    const currentItemId = currentItem?.id;
+    const nextPlaylist = playlist.filter(item => !isOnlinePlaylistItem(item));
+    const nextIndex = currentItem && !isOnlinePlaylistItem(currentItem)
+      ? nextPlaylist.findIndex(item => item.id === currentItemId)
+      : -1;
+
+    setAudioInfoTab('lyrics');
+    setPlaylist(nextPlaylist);
+    setCurrentOnlineTrackId('');
+    if (currentItem && isOnlinePlaylistItem(currentItem)) {
+      lastSelectedFileRef.current = null;
+      setVideoSrc('');
+      setCurrentPlaylistIndex(-1);
+      setPlayerState(state => ({ ...state, isPlaying: false, currentTime: 0, duration: 0 }));
+    } else {
+      setCurrentPlaylistIndex(nextIndex);
+    }
+  };
+
+  const onlinePlaylistTrackIds = storedOnlinePlaylistItems
+    .filter(item => item.id.startsWith('online-'))
+    .map(item => item.id.replace(/^online-/, ''));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const raw = window.localStorage.getItem(PLAYLIST_STORAGE_KEY);
+        if (!raw) {
+          return;
+        }
+
+        const parsed = JSON.parse(raw) as PersistedPlaylistState | null;
+        const items = Array.isArray(parsed?.items) ? parsed.items : [];
+        if (items.length === 0) {
+          return;
+        }
+
+        const restoredLocalItems: PlaylistItem[] = [];
+        const restoredOnlineItems: PersistedPlaylistItem[] = [];
+        for (const entry of items) {
+          if (entry.onlineMusic) {
+            restoredOnlineItems.push(entry);
+            continue;
+          }
+
+          const item = await restoreLocalPlaylistItem(entry);
+          if (item) {
+            restoredLocalItems.push(item);
+          }
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setStoredOnlinePlaylistItems(restoredOnlineItems);
+        setPlaylist(restoredLocalItems);
+
+        const restoredIndex = parsed?.currentItemId
+          ? restoredLocalItems.findIndex(item => item.id === parsed.currentItemId)
+          : -1;
+        const nextIndex = restoredIndex >= 0 ? restoredIndex : -1;
+        setCurrentPlaylistIndex(nextIndex);
+        setVideoSrc('');
+        lastSelectedFileRef.current = null;
+        setCurrentOnlineTrackId('');
+        setOnlineMusicEnabled(false);
+        setAudioInfoTab('lyrics');
+        setPlaylistViewMode('audio');
+        setDirPlaylist([]);
+        setDirCurrentIndex(-1);
+        setPlayerState(prev => ({ ...prev, isPlaying: false, currentTime: 0, duration: 0 }));
+      } catch (error) {
+        console.warn('恢复播放列表失败:', error);
+      } finally {
+        playlistRestoreCompletedRef.current = true;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [restoreLocalPlaylistItem, restoreOnlinePlaylistItem]);
+
+  useEffect(() => {
+    if (!onlineMusicEnabled || storedOnlinePlaylistItems.length === 0) {
+      return;
+    }
+
+    const restoredOnlineItems = storedOnlinePlaylistItems
+      .map(entry => restoreOnlinePlaylistItem(entry))
+      .filter((item): item is PlaylistItem => !!item);
+
+    if (restoredOnlineItems.length === 0) {
+      return;
+    }
+
+    setPlaylist(prev => {
+      const existingIds = new Set(prev.map(item => item.id));
+      const missingItems = restoredOnlineItems.filter(item => !existingIds.has(item.id));
+      if (missingItems.length === 0) {
+        return prev;
+      }
+      return [...prev, ...missingItems];
+    });
+  }, [onlineMusicEnabled, restoreOnlinePlaylistItem, storedOnlinePlaylistItems]);
+
+  useEffect(() => {
+    if (!playlistRestoreCompletedRef.current) {
+      return;
+    }
+
+    try {
+      const persistedLocalItems = playlist
+        .filter(item => !isOnlinePlaylistItem(item))
+        .map((item): PersistedPlaylistItem | null => {
+          if (item.originalPath) {
+            return {
+              id: item.id,
+              name: item.name,
+              originalPath: item.originalPath,
+            };
+          }
+          return null;
+        })
+        .filter((item): item is PersistedPlaylistItem => !!item);
+
+      const persistedItems = [...persistedLocalItems, ...storedOnlinePlaylistItems];
+
+      if (persistedItems.length === 0) {
+        window.localStorage.removeItem(PLAYLIST_STORAGE_KEY);
+        return;
+      }
+
+      const currentItemId = currentPlaylistIndex >= 0 ? playlist[currentPlaylistIndex]?.id : undefined;
+      const payload: PersistedPlaylistState = {
+        items: persistedItems,
+        currentItemId: persistedItems.some(item => item.id === currentItemId) ? currentItemId : undefined,
+      };
+      window.localStorage.setItem(PLAYLIST_STORAGE_KEY, JSON.stringify(payload));
+    } catch (error) {
+      console.warn('持久化播放列表失败:', error);
+    }
+  }, [currentPlaylistIndex, isOnlinePlaylistItem, playlist, storedOnlinePlaylistItems]);
+
+  useEffect(() => {
+    if (onlineMusicIdleTimerRef.current !== null) {
+      window.clearTimeout(onlineMusicIdleTimerRef.current);
+      onlineMusicIdleTimerRef.current = null;
+    }
+
+    if (!onlineMusicEnabled || audioInfoTab !== 'online_music') {
+      return;
+    }
+
+    onlineMusicIdleTimerRef.current = window.setTimeout(() => {
+      setAudioInfoTab('lyrics');
+    }, 15000);
+
+    return () => {
+      if (onlineMusicIdleTimerRef.current !== null) {
+        window.clearTimeout(onlineMusicIdleTimerRef.current);
+        onlineMusicIdleTimerRef.current = null;
+      }
+    };
+  }, [audioInfoTab, onlineMusicEnabled, onlineMusicInteractionTick]);
+
+  const currentOnlineTrack = currentPlaylistIndex >= 0
+    ? playlist[currentPlaylistIndex]?.onlineMusic
+    : undefined;
 
   // 窗口拖拽功能 - 全窗口拖拽
   useEffect(() => {
@@ -860,6 +1458,8 @@ function App() {
         onOpenFile={handleOpenFile}
         onExit={handleExit}
         isPlaying={videoSrc ? playerState.isPlaying : false}
+        onlineMusicEnabled={onlineMusicEnabled}
+        onToggleOnlineMusic={handleToggleOnlineMusic}
         autoHide={(getCurrentMediaType() === 'image') || (getCurrentMediaType() === 'video' && playerState.isPlaying) || (() => {
           const item = playlist[currentPlaylistIndex];
           if (!item) return false;
@@ -878,7 +1478,7 @@ function App() {
 
       {/* 播放器区域，占据整个屏幕 */}
       <div className="absolute inset-0">
-        {!videoSrc ? (
+        {!videoSrc && !onlineMusicEnabled ? (
           <div className="w-full h-full flex items-center justify-center p-8">
 
             <FileDropZone 
@@ -892,6 +1492,25 @@ function App() {
             fileName={playlist[currentPlaylistIndex]?.name || lastSelectedFileRef.current?.name}
             fileBlob={playlist[currentPlaylistIndex]?.file || lastSelectedFileRef.current || undefined}
             filePath={playlist[currentPlaylistIndex]?.originalPath}
+            forceAudioMode={onlineMusicEnabled && !videoSrc}
+            onlineMusicEnabled={onlineMusicEnabled}
+            audioInfoTab={audioInfoTab}
+            onAudioInfoTabChange={handleAudioInfoTabChange}
+            onlineMusicKeyword={onlineMusicKeyword}
+            onOnlineMusicKeywordChange={(value) => {
+              markOnlineMusicInteraction();
+              setOnlineMusicKeyword(value);
+            }}
+            onlineMusicSearching={onlineMusicSearching}
+            onlineMusicError={onlineMusicError}
+            onlineMusicResults={onlineMusicResults}
+            currentOnlineTrackId={currentOnlineTrackId}
+            onlinePlaylistTrackIds={onlinePlaylistTrackIds}
+            currentOnlineTrack={currentOnlineTrack}
+            onOnlineMusicSearch={handleSearchOnlineMusic}
+            onOnlineMusicPlay={handlePlayOnlineMusic}
+            onOnlineMusicAddToPlaylist={handleAddOnlineMusicToPlaylist}
+            onOnlineMusicInteraction={markOnlineMusicInteraction}
             onStateChange={handlePlayerStateChange}
             onError={handleError}
             onEnded={handleTrackEnded}
@@ -906,7 +1525,7 @@ function App() {
         )}
 
         {/* 控制栏 - 仅在音频和视频模式下显示 */}
-        {videoSrc && getCurrentMediaType() !== 'image' && (
+        {(videoSrc || onlineMusicEnabled) && getCurrentMediaType() !== 'image' && (
           <ControlBar
             onPlayPause={() => playPauseRef.current?.()}
             onStop={handleStop}
@@ -936,6 +1555,7 @@ function App() {
               });
             }}
             playlistViewMode={playlistViewMode}
+            onlineMusicEnabled={onlineMusicEnabled}
             setPlaylistViewMode={setPlaylistViewMode}
             directoryMode={directoryMode}
             onToggleDirectoryMode={() => {

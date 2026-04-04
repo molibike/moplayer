@@ -3,9 +3,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::thread;
+use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use tauri::{command, Manager, State};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+static DIST_PREVIEW_SERVER: OnceLock<()> = OnceLock::new();
 
 fn normalize_search_text(input: &str) -> String {
     input
@@ -912,6 +922,311 @@ fn get_startup_file(state: State<StartupState>) -> Option<String> {
     state.file_path.lock().ok().and_then(|mut path| path.take())
 }
 
+fn is_port_open(addr: &str) -> bool {
+    TcpStream::connect(addr).is_ok()
+}
+
+fn is_music_server_running() -> bool {
+    is_port_open("127.0.0.1:31999")
+}
+
+fn is_vite_dev_server_running() -> bool {
+    is_port_open("127.0.0.1:5173")
+}
+
+fn is_dist_preview_server_running() -> bool {
+    is_port_open("127.0.0.1:4173")
+}
+
+fn guess_mime_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|ext| ext.to_str()).unwrap_or_default().to_ascii_lowercase().as_str() {
+        "html" => "text/html; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "ico" => "image/x-icon",
+        "webp" => "image/webp",
+        "map" => "application/json; charset=utf-8",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    }
+}
+
+fn start_dist_preview_server(dist_dir: PathBuf) -> Option<String> {
+    if is_dist_preview_server_running() {
+        return Some("http://127.0.0.1:4173/".to_string());
+    }
+
+    if DIST_PREVIEW_SERVER.get().is_none() {
+        let listener = match std::net::TcpListener::bind("127.0.0.1:4173") {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("[dev] 本地 dist 预览服务启动失败: {}", error);
+                return None;
+            }
+        };
+
+        let _ = DIST_PREVIEW_SERVER.set(());
+
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+
+                let mut buffer = [0_u8; 4096];
+                let Ok(size) = stream.read(&mut buffer) else {
+                    continue;
+                };
+                if size == 0 {
+                    continue;
+                }
+
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let mut lines = request.lines();
+                let request_line = lines.next().unwrap_or_default();
+                let mut parts = request_line.split_whitespace();
+                let method = parts.next().unwrap_or_default();
+                let raw_path = parts.next().unwrap_or("/");
+                if method != "GET" && method != "HEAD" {
+                    let _ = stream.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n");
+                    continue;
+                }
+
+                let path_without_query = raw_path.split('?').next().unwrap_or("/");
+                let trimmed = path_without_query.trim_start_matches('/');
+                let safe_path = trimmed.replace('\\', "/");
+                let has_traversal = safe_path.split('/').any(|segment| segment == "..");
+
+                let target_path = if safe_path.is_empty() || safe_path == "/" || has_traversal {
+                    dist_dir.join("index.html")
+                } else {
+                    dist_dir.join(&safe_path)
+                };
+
+                let response_path = if target_path.is_file() {
+                    target_path
+                } else {
+                    dist_dir.join("index.html")
+                };
+
+                let Ok(body) = fs::read(&response_path) else {
+                    let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+                    continue;
+                };
+
+                let mime = guess_mime_type(&response_path);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+                    mime,
+                    body.len()
+                );
+                if stream.write_all(header.as_bytes()).is_err() {
+                    continue;
+                }
+                if method != "HEAD" {
+                    let _ = stream.write_all(&body);
+                }
+            }
+        });
+    }
+
+    for _ in 0..20 {
+        if is_dist_preview_server_running() {
+            return Some("http://127.0.0.1:4173/".to_string());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    None
+}
+
+fn find_upwards(start: &Path, relative: &str, max_depth: usize) -> Option<PathBuf> {
+    let mut cursor = start.to_path_buf();
+    for _ in 0..=max_depth {
+        let candidate = cursor.join(relative);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if !cursor.pop() {
+            break;
+        }
+    }
+    None
+}
+
+fn try_fallback_to_dist(app: &tauri::AppHandle) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    if is_vite_dev_server_running() {
+        return;
+    }
+
+    let mut start_dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(current_dir) = std::env::current_dir() {
+        start_dirs.push(current_dir);
+    }
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|path| path.parent().map(|parent| parent.to_path_buf())) {
+        start_dirs.push(exe_dir);
+    }
+
+    let dist_index = start_dirs
+        .into_iter()
+        .filter_map(|dir| {
+            let win_style = find_upwards(&dir, "dist\\index.html", 8);
+            let unix_style = find_upwards(&dir, "dist/index.html", 8);
+            win_style.or(unix_style)
+        })
+        .next();
+
+    let Some(dist_index) = dist_index else {
+        eprintln!("[dev] 未检测到 Vite 开发服务，同时未找到 dist/index.html，页面将显示 localhost 拒绝连接");
+        return;
+    };
+
+    let Some(window) = app.get_webview_window("main") else {
+        eprintln!("[dev] 未找到主窗口，无法回退到 dist/index.html");
+        return;
+    };
+
+    let Some(dist_dir) = dist_index.parent().map(|parent| parent.to_path_buf()) else {
+        eprintln!("[dev] dist/index.html 不存在父目录，无法启动本地预览服务: {}", dist_index.display());
+        return;
+    };
+
+    let Some(preview_url) = start_dist_preview_server(dist_dir) else {
+        eprintln!("[dev] 本地 dist 预览服务启动失败，无法回退加载: {}", dist_index.display());
+        return;
+    };
+
+    let url = match tauri::Url::parse(&preview_url) {
+        Ok(url) => url,
+        Err(error) => {
+            eprintln!("[dev] 本地 dist 预览地址无效 {}: {}", preview_url, error);
+            return;
+        }
+    };
+
+    println!("[dev] 未检测到 Vite 开发服务，已回退到本地预览服务: {} -> {}", dist_index.display(), preview_url);
+    let _ = window.navigate(url);
+}
+
+fn try_start_music_server(app: &tauri::AppHandle) {
+    if is_music_server_running() {
+        println!("[music-server] 本地在线音乐服务已在运行，跳过自动启动");
+        return;
+    }
+
+    let mut script_candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        script_candidates.push(resource_dir.join("local-music-server.mjs"));
+        script_candidates.push(resource_dir.join("resources").join("local-music-server.mjs"));
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        script_candidates.push(current_dir.join("scripts").join("local-music-server.mjs"));
+        script_candidates.push(current_dir.join("..").join("scripts").join("local-music-server.mjs"));
+        if let Some(found) = find_upwards(&current_dir, "scripts\\local-music-server.mjs", 8) {
+            script_candidates.push(found);
+        }
+        if let Some(found) = find_upwards(&current_dir, "scripts/local-music-server.mjs", 8) {
+            script_candidates.push(found);
+        }
+    }
+
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|path| path.parent().map(|parent| parent.to_path_buf())) {
+        script_candidates.push(exe_dir.join("local-music-server.mjs"));
+        script_candidates.push(exe_dir.join("resources").join("local-music-server.mjs"));
+        script_candidates.push(exe_dir.join("..").join("resources").join("local-music-server.mjs"));
+        if let Some(found) = find_upwards(&exe_dir, "scripts\\local-music-server.mjs", 8) {
+            script_candidates.push(found);
+        }
+        if let Some(found) = find_upwards(&exe_dir, "scripts/local-music-server.mjs", 8) {
+            script_candidates.push(found);
+        }
+    }
+
+    let script_path = script_candidates.into_iter().find(|path| path.exists());
+
+    let Some(script_path) = script_path else {
+        eprintln!("[music-server] 未找到 local-music-server.mjs，无法自动启动在线音乐服务");
+        return;
+    };
+
+    let script_display = script_path.to_string_lossy().to_string();
+    let script_parent = script_path.parent().map(|p| p.to_path_buf());
+
+    let spawn_result = if cfg!(debug_assertions) {
+        #[cfg(target_os = "windows")]
+        {
+            let mut command = Command::new("cmd");
+            command
+                .arg("/C")
+                .arg("start")
+                .arg("MoPlayer 在线音乐服务")
+                .arg("node")
+                .arg(&script_display)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if let Some(parent) = &script_parent {
+                command.current_dir(parent);
+            }
+            command.spawn()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut command = Command::new("node");
+            command
+                .arg(&script_display)
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
+            if let Some(parent) = &script_parent {
+                command.current_dir(parent);
+            }
+            command.spawn()
+        }
+    } else {
+        let mut command = Command::new("node");
+        command
+            .arg(&script_display)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(parent) = &script_parent {
+            command.current_dir(parent);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            command.creation_flags(0x08000000);
+        }
+        command.spawn()
+    };
+
+    match spawn_result {
+        Ok(_) => {
+            println!("[music-server] 已自动启动本地在线音乐服务脚本: {}", script_path.display());
+            for _ in 0..30 {
+                if is_music_server_running() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+        Err(error) => {
+            eprintln!("[music-server] 自动启动失败: {}", error);
+        }
+    };
+}
+
 fn main() {
     env_logger::init();
 
@@ -936,6 +1251,9 @@ fn main() {
             save_local_lyrics
         ])
         .setup(|app| {
+            try_fallback_to_dist(&app.handle());
+            try_start_music_server(&app.handle());
+
             let args: Vec<String> = std::env::args().collect();
             println!("Command line arguments: {:?}", args);
 

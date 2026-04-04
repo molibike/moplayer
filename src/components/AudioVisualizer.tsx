@@ -16,6 +16,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   artist
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const enableRealtimeAnalysis = true;
   // 使用setInterval定时器ID，避免requestAnimationFrame保持WebView2渲染循环
   const timerRef = useRef<number | null>(null);
   // Web Audio API 引用（用于获取真实音频频率数据）
@@ -26,7 +27,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
 
   // 初始化AudioContext和AnalyserNode - 仅在audioElement变化时创建
   useEffect(() => {
-    if (!audioElement) return;
+    if (!audioElement || !enableRealtimeAnalysis) return;
     // 避免重复创建source（一个audio元素只能createMediaElementSource一次）
     if (sourceRef.current) return;
 
@@ -35,7 +36,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       const analyser = ctx.createAnalyser();
       // 使用较小但足够的FFT以支持最多128条音波柱（256 = 128个频率bins）
       analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.6;
+      analyser.smoothingTimeConstant = 0.35;
 
       const source = ctx.createMediaElementSource(audioElement);
       source.connect(analyser);
@@ -59,14 +60,29 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
       sourceRef.current = null;
       dataArrayRef.current = null;
     };
-  }, [audioElement]);
+  }, [audioElement, enableRealtimeAnalysis]);
 
   // 恢复被暂停的AudioContext
   useEffect(() => {
-    if (isPlaying && audioContextRef.current && audioContextRef.current.state === 'suspended') {
+    if (enableRealtimeAnalysis && isPlaying && audioContextRef.current && audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume().catch(() => {});
     }
-  }, [isPlaying]);
+  }, [enableRealtimeAnalysis, isPlaying]);
+
+  const drawStaticBars = (
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    barCount: number,
+    barWidth: number,
+    barSpacing: number
+  ) => {
+    const baseHeight = Math.max(canvas.height * 0.04, 2);
+    for (let i = 0; i < barCount; i++) {
+      const x = i * (barWidth + barSpacing);
+      const y = canvas.height - baseHeight;
+      ctx.fillRect(x, y, barWidth, baseHeight);
+    }
+  };
 
   // 绘制真实音频频率数据
   const drawBars = () => {
@@ -113,15 +129,7 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
         ctx.fillRect(x, y, barWidth, barHeight);
       }
     } else {
-      // AudioContext不可用时的回退：简单模拟
-      const time = Date.now() / 1000;
-      for (let i = 0; i < barCount; i++) {
-        const amplitude = Math.sin(time + i * 0.3) * 0.5 + 0.5;
-        const barHeight = Math.max(amplitude * canvas.height * 0.5, 4);
-        const x = i * (barWidth + barSpacing);
-        const y = canvas.height - barHeight;
-        ctx.fillRect(x, y, barWidth, barHeight);
-      }
+      drawStaticBars(ctx, canvas, barCount, barWidth, barSpacing);
     }
   };
 
@@ -130,8 +138,8 @@ const AudioVisualizer: React.FC<AudioVisualizerProps> = ({
   useEffect(() => {
     if (isPlaying) {
       drawBars();
-      // 每500ms绘制一次（2fps），降低合成开销
-      timerRef.current = window.setInterval(drawBars, 500);
+      // 每100ms绘制一次，提高音波响应速度
+      timerRef.current = window.setInterval(drawBars, 100);
     } else {
       if (timerRef.current !== null) {
         window.clearInterval(timerRef.current);
