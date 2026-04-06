@@ -165,6 +165,7 @@ function App() {
   const playlistRestoreCompletedRef = useRef(false);
   const onlineMusicIdleTimerRef = useRef<number | null>(null);
   const [onlineMusicInteractionTick, setOnlineMusicInteractionTick] = useState(0);
+  const onlineMusicServiceStatusRef = useRef(onlineMusicServiceStatus);
   const onlineMusicPrecheckBatchRef = useRef(0);
   const onlineMusicPrecheckCacheRef = useRef<Record<string, OnlineMusicPrecheckCacheEntry>>({});
 
@@ -842,8 +843,13 @@ function App() {
     }
   }, [markOnlineMusicInteraction]);
 
+  // 同步 ref，确保回调中始终读到最新状态
+  useEffect(() => {
+    onlineMusicServiceStatusRef.current = onlineMusicServiceStatus;
+  }, [onlineMusicServiceStatus]);
+
   const ensureOnlineMusicServerStarted = useCallback(async () => {
-    if (onlineMusicServiceStatus === 'running') {
+    if (onlineMusicServiceStatusRef.current === 'running') {
       return;
     }
 
@@ -859,10 +865,10 @@ function App() {
       setOnlineMusicServiceMessage(message);
       throw error;
     }
-  }, [onlineMusicServiceStatus]);
+  }, []);
 
   const stopOnlineMusicServer = useCallback(async () => {
-    if (onlineMusicServiceStatus === 'stopped') {
+    if (onlineMusicServiceStatusRef.current === 'stopped') {
       setOnlineMusicServiceMessage('在线服务已关闭');
       return;
     }
@@ -879,7 +885,7 @@ function App() {
       setOnlineMusicServiceMessage(message);
       throw error;
     }
-  }, [onlineMusicServiceStatus]);
+  }, []);
 
   const createOnlineFile = useCallback((item: OnlineMusicSearchResult) => {
     return new File([], `${item.artist ? `${item.artist} - ` : ''}${item.title}.mp3`, { type: 'audio/mpeg' });
@@ -1039,7 +1045,7 @@ function App() {
     const currentBatchId = onlineMusicPrecheckBatchRef.current + 1;
     onlineMusicPrecheckBatchRef.current = currentBatchId;
 
-    if (onlineMusicResults.length === 0) {
+    if (!onlineMusicEnabled || onlineMusicResults.length === 0) {
       onlineMusicPrecheckCacheRef.current = {};
       setOnlineMusicPlaybackStatuses({});
       return;
@@ -1149,7 +1155,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [checkOnlineStream, ensureOnlineMusicServerStarted, onlineMusicResults]);
+  }, [checkOnlineStream, ensureOnlineMusicServerStarted, onlineMusicEnabled, onlineMusicResults]);
 
   const createOnlinePlaylistItem = useCallback((item: OnlineMusicSearchResult): PlaylistItem => {
     const file = createOnlineFile(item);

@@ -8,6 +8,10 @@ import { parseLyrics } from '../utils/lyrics';
 
 import { invoke } from '@tauri-apps/api/core';
 
+// 导入 Buffer polyfill，music-metadata-browser 解析二进制封面数据时依赖此对象
+import { Buffer } from 'buffer';
+globalThis.Buffer = Buffer;
+
 interface LyricsCandidate {
   source: string;
   title: string;

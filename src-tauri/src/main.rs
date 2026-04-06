@@ -18,6 +18,27 @@ use std::os::windows::process::CommandExt;
 static DIST_PREVIEW_SERVER: OnceLock<()> = OnceLock::new();
 static MUSIC_SERVER_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
+fn resolve_node_command() -> Option<String> {
+    let candidates = ["node", "node.exe"];
+    for candidate in candidates {
+        let mut command = Command::new(candidate);
+        #[cfg(target_os = "windows")]
+        {
+            command.creation_flags(0x08000000);
+        }
+        let result = command
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if matches!(result, Ok(status) if status.success()) {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
 fn normalize_search_text(input: &str) -> String {
     input
         .to_lowercase()
@@ -1187,7 +1208,11 @@ fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
     let script_display = script_path.to_string_lossy().to_string();
     let script_parent = script_path.parent().map(|p| p.to_path_buf());
 
-    let mut command = Command::new("node");
+    let Some(node_command) = resolve_node_command() else {
+        return Err("未找到 Node.js 运行环境，请先安装 Node.js 或将其加入系统 PATH".to_string());
+    };
+
+    let mut command = Command::new(&node_command);
     command
         .arg(&script_display)
         .stdin(Stdio::null());
@@ -1214,12 +1239,29 @@ fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
         return Err("在线音乐服务已启动，但无法记录进程句柄".to_string());
     }
 
-    println!("[music-server] 已启动本地在线音乐服务脚本: {}", script_path.display());
+    println!("[music-server] 使用 {} 启动本地在线音乐服务脚本: {}", node_command, script_path.display());
     for _ in 0..30 {
         if is_music_server_running() {
             return Ok(true);
         }
         thread::sleep(Duration::from_millis(100));
+    }
+
+    if let Ok(mut guard) = music_server_child().lock() {
+        if let Some(mut child) = guard.take() {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    eprintln!("[music-server] 在线音乐服务进程已提前退出: {}", status);
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                Err(error) => {
+                    eprintln!("[music-server] 检查在线音乐服务进程状态失败: {}", error);
+                }
+            }
+        }
     }
 
     Err("在线音乐服务启动超时，请稍后重试".to_string())
