@@ -8,6 +8,7 @@
     "dev:music": "node scripts/local-music-server.mjs",
     "dev:tauri": "vite",
     "build": "vite build",
+    "build:music": "npx esbuild scripts/local-music-server.mjs --bundle --platform=node --format=cjs --outfile=dist/music-server.cjs && npx pkg dist/music-server.cjs -t node18-win-x64 -o src-tauri/music-server.exe",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -30,6 +31,7 @@
     "@types/react-dom": "^18.2.7",
     "@vitejs/plugin-react": "^4.0.3",
     "autoprefixer": "^10.4.14",
+    "pkg": "^5.8.1",
     "postcss": "^8.4.27",
     "tailwindcss": "^3.3.3",
     "typescript": "^5.0.2",

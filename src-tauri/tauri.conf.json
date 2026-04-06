@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "identifier": "com.moplayer.desktop",
   "build": {
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run build:music",
     "beforeDevCommand": "npm run dev",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173"
@@ -71,7 +71,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../scripts/local-music-server.mjs"
+      "music-server.exe"
     ],
     "externalBin": [],
     "copyright": "Copyright © 2024 MoPlayer Team",

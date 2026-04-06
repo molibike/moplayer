@@ -18,26 +18,7 @@ use std::os::windows::process::CommandExt;
 static DIST_PREVIEW_SERVER: OnceLock<()> = OnceLock::new();
 static MUSIC_SERVER_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
-fn resolve_node_command() -> Option<String> {
-    let candidates = ["node", "node.exe"];
-    for candidate in candidates {
-        let mut command = Command::new(candidate);
-        #[cfg(target_os = "windows")]
-        {
-            command.creation_flags(0x08000000);
-        }
-        let result = command
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if matches!(result, Ok(status) if status.success()) {
-            return Some(candidate.to_string());
-        }
-    }
-    None
-}
+
 
 fn normalize_search_text(input: &str) -> String {
     input
@@ -1086,38 +1067,23 @@ fn find_upwards(start: &Path, relative: &str, max_depth: usize) -> Option<PathBu
     None
 }
 
-fn resolve_music_server_script_path(app: &tauri::AppHandle) -> Option<PathBuf> {
-    let mut script_candidates: Vec<PathBuf> = Vec::new();
+fn resolve_music_server_exe_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let mut exe_candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(resource_dir) = app.path().resource_dir() {
-        script_candidates.push(resource_dir.join("local-music-server.mjs"));
-        script_candidates.push(resource_dir.join("resources").join("local-music-server.mjs"));
+        exe_candidates.push(resource_dir.join("music-server.exe"));
     }
 
     if let Ok(current_dir) = std::env::current_dir() {
-        script_candidates.push(current_dir.join("scripts").join("local-music-server.mjs"));
-        script_candidates.push(current_dir.join("..").join("scripts").join("local-music-server.mjs"));
-        if let Some(found) = find_upwards(&current_dir, "scripts\\local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-        if let Some(found) = find_upwards(&current_dir, "scripts/local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
+        exe_candidates.push(current_dir.join("music-server.exe"));
+        exe_candidates.push(current_dir.join("src-tauri").join("music-server.exe"));
     }
 
     if let Some(exe_dir) = std::env::current_exe().ok().and_then(|path| path.parent().map(|parent| parent.to_path_buf())) {
-        script_candidates.push(exe_dir.join("local-music-server.mjs"));
-        script_candidates.push(exe_dir.join("resources").join("local-music-server.mjs"));
-        script_candidates.push(exe_dir.join("..").join("resources").join("local-music-server.mjs"));
-        if let Some(found) = find_upwards(&exe_dir, "scripts\\local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-        if let Some(found) = find_upwards(&exe_dir, "scripts/local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
+        exe_candidates.push(exe_dir.join("music-server.exe"));
     }
 
-    script_candidates.into_iter().find(|path| path.exists())
+    exe_candidates.into_iter().find(|path| path.exists())
 }
 
 fn try_fallback_to_dist(app: &tauri::AppHandle) {
@@ -1201,27 +1167,21 @@ fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
         return Ok(true);
     }
 
-    let Some(script_path) = resolve_music_server_script_path(app) else {
-        return Err("未找到 local-music-server.mjs，无法启动在线音乐服务".to_string());
+    let Some(exe_path) = resolve_music_server_exe_path(app) else {
+        return Err("未找到 music-server.exe，无法启动在线音乐服务".to_string());
     };
 
-    let script_display = script_path.to_string_lossy().to_string();
-    let script_parent = script_path.parent().map(|p| p.to_path_buf());
+    let exe_display = exe_path.to_string_lossy().to_string();
+    let exe_parent = exe_path.parent().map(|p| p.to_path_buf());
 
-    let Some(node_command) = resolve_node_command() else {
-        return Err("未找到 Node.js 运行环境，请先安装 Node.js 或将其加入系统 PATH".to_string());
-    };
-
-    let mut command = Command::new(&node_command);
-    command
-        .arg(&script_display)
-        .stdin(Stdio::null());
+    let mut command = Command::new(&exe_display);
+    command.stdin(Stdio::null());
     if cfg!(debug_assertions) {
         command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     } else {
         command.stdout(Stdio::null()).stderr(Stdio::null());
     }
-    if let Some(parent) = &script_parent {
+    if let Some(parent) = &exe_parent {
         command.current_dir(parent);
     }
     #[cfg(target_os = "windows")]
@@ -1239,7 +1199,7 @@ fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
         return Err("在线音乐服务已启动，但无法记录进程句柄".to_string());
     }
 
-    println!("[music-server] 使用 {} 启动本地在线音乐服务脚本: {}", node_command, script_path.display());
+    println!("[music-server] 启动本地在线音乐服务独立进程: {}", exe_path.display());
     for _ in 0..30 {
         if is_music_server_running() {
             return Ok(true);
