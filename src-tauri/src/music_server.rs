@@ -61,6 +61,142 @@ fn get_source_label(source: &str) -> &str {
     }
 }
 
+async fn search_tencent(client: &Client, keyword: &str) -> Vec<TrackPayload> {
+    let mut tracks = Vec::new();
+    let body = json!({
+        "comm": { "ct": "19", "cv": "1859", "uin": "0" },
+        "req": {
+            "method": "DoSearchForQQMusicDesktop",
+            "module": "music.search.SearchCgiService",
+            "param": {
+                "grp": 1,
+                "num_per_page": 15,
+                "page_num": 1,
+                "query": keyword,
+                "search_type": 0
+            }
+        }
+    });
+
+    if let Ok(resp) = client.post("https://u.y.qq.com/cgi-bin/musicu.fcg")
+        .header("User-Agent", "Mozilla/5.0")
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Content-Type", "application/json;charset=utf-8")
+        .json(&body)
+        .send().await 
+    {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(list) = json.pointer("/req/data/body/song/list").and_then(|v| v.as_array()) {
+                for item in list {
+                    if let Some(mid) = item["mid"].as_str() {
+                        let title = item["title"].as_str().unwrap_or_default().to_string();
+                        let mut artist_list = Vec::new();
+                        if let Some(singers) = item["singer"].as_array() {
+                            for singer in singers {
+                                if let Some(name) = singer["name"].as_str() {
+                                    artist_list.push(name.to_string());
+                                }
+                            }
+                        }
+                        let artist = artist_list.join(" ");
+                        let album = item.pointer("/album/title").or_else(|| item.pointer("/album/name"))
+                            .and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                        let album_mid = item.pointer("/album/mid").or_else(|| item.pointer("/album/pmid"))
+                            .and_then(|v| v.as_str()).unwrap_or_default();
+                        
+                        let cover = if album_mid.is_empty() {
+                            String::new()
+                        } else {
+                            format!("https://y.gtimg.cn/music/photo_new/T002R300x300M000{}.jpg?max_age=2592000", album_mid)
+                        };
+                        
+                        let duration_ms = item["interval"].as_u64().map(|s| s * 1000);
+                        let id = mid.to_string();
+                        let source = "tencent".to_string();
+                        
+                        tracks.push(TrackPayload {
+                            id: id.clone(),
+                            title: title.clone(),
+                            name: title.clone(),
+                            artist: artist.clone(),
+                            artist_list: artist_list.clone(),
+                            artists: artist_list,
+                            album: album.clone(),
+                            album_name: album,
+                            cover: cover.clone(),
+                            pic: cover.clone(),
+                            image: cover,
+                            source: source.clone(),
+                            source_label: get_source_label(&source).to_string(),
+                            duration_ms,
+                            url: format!("https://y.qq.com/n/ryqq/songDetail/{}", id),
+                            stream_url: format!("/api/music/stream?id={}&source={}", urlencoding::encode(&id), urlencoding::encode(&source)),
+                            lyric_url: format!("/api/music/lyric?id={}&source={}", urlencoding::encode(&id), urlencoding::encode(&source)),
+                            song_id: id,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    tracks
+}
+
+async fn search_kuwo(client: &Client, keyword: &str) -> Vec<TrackPayload> {
+    let mut tracks = Vec::new();
+    let req_url = format!(
+        "http://search.kuwo.cn/r.s?all={}&ft=music&itemset=web_2013&client=kt&pn=0&rn=15&rformat=json&encoding=utf8",
+        urlencoding::encode(keyword)
+    );
+
+    if let Ok(resp) = client.get(&req_url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send().await 
+    {
+        if let Ok(text) = resp.text().await {
+            let json_str = text.replace("&nbsp;", " ").replace("&#39;", "'").replace("&#34;", "\"");
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                if let Some(list) = json["abslist"].as_array() {
+                    for item in list {
+                        let raw_id = item["DC_TARGETID"].as_str().or_else(|| item["MUSICRID"].as_str()).unwrap_or_default();
+                        let id = raw_id.replace("MUSIC_", "");
+                        if id.is_empty() { continue; }
+                        
+                        let title = item["NAME"].as_str().or_else(|| item["SONGNAME"].as_str()).unwrap_or_default().to_string();
+                        let artist = item["ARTIST"].as_str().unwrap_or_default().to_string();
+                        let album = item["ALBUM"].as_str().unwrap_or_default().to_string();
+                        let duration_ms = item["DURATION"].as_str().and_then(|s| s.parse::<u64>().ok()).map(|s| s * 1000);
+                        let source = "kuwo".to_string();
+                        let artist_list = vec![artist.clone()];
+
+                        tracks.push(TrackPayload {
+                            id: id.clone(),
+                            title: title.clone(),
+                            name: title.clone(),
+                            artist: artist.clone(),
+                            artist_list: artist_list.clone(),
+                            artists: artist_list,
+                            album: album.clone(),
+                            album_name: album,
+                            cover: String::new(),
+                            pic: String::new(),
+                            image: String::new(),
+                            source: source.clone(),
+                            source_label: get_source_label(&source).to_string(),
+                            duration_ms,
+                            url: format!("http://www.kuwo.cn/play_detail/{}", id),
+                            stream_url: format!("/api/music/stream?id={}&source={}", urlencoding::encode(&id), urlencoding::encode(&source)),
+                            lyric_url: format!("/api/music/lyric?id={}&source={}", urlencoding::encode(&id), urlencoding::encode(&source)),
+                            song_id: id,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    tracks
+}
+
 fn extract_id_from_meting_url(url_str: &str) -> String {
     if let Ok(url) = Url::parse(url_str) {
         for (k, v) in url.query_pairs() {
@@ -116,8 +252,19 @@ async fn search(
         );
         
         let client = state.client.clone();
+        let keyword_clone = keyword.clone();
+        
         futures.push(async move {
             let mut source_tracks = Vec::new();
+            
+            if src == "tencent" || src == "qq" {
+                source_tracks = search_tencent(&client, &keyword_clone).await;
+                return source_tracks;
+            } else if src == "kuwo" {
+                source_tracks = search_kuwo(&client, &keyword_clone).await;
+                return source_tracks;
+            }
+            
             if let Ok(resp) = client.get(&req_url).send().await {
                 if let Ok(items) = resp.json::<Vec<serde_json::Value>>().await {
                     for item in items {
@@ -245,8 +392,78 @@ async fn lyric(
     String::new().into_response()
 }
 
+async fn get_tencent_url(client: &Client, id: &str) -> Option<String> {
+    let variants = vec![
+        ("M500", "mp3"),
+        ("C400", "m4a"),
+        ("M800", "mp3"),
+    ];
+
+    for (prefix, suffix) in variants {
+        let filename = format!("{}{}{}.{}", prefix, id, id, suffix);
+        let body = json!({
+            "req_1": {
+                "module": "vkey.GetVkeyServer",
+                "method": "CgiGetVkey",
+                "param": {
+                    "filename": [filename],
+                    "guid": "10000",
+                    "songmid": [id],
+                    "songtype": [0],
+                    "uin": "0",
+                    "loginflag": 1,
+                    "platform": "20"
+                }
+            },
+            "loginUin": "0",
+            "comm": {
+                "uin": "0",
+                "format": "json",
+                "ct": 24,
+                "cv": 0
+            }
+        });
+
+        if let Ok(resp) = client.post("https://u.y.qq.com/cgi-bin/musicu.fcg")
+            .header("User-Agent", "Mozilla/5.0")
+            .header("Accept", "application/json, text/plain, */*")
+            .header("Content-Type", "application/json;charset=utf-8")
+            .json(&body)
+            .send().await
+        {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(sip) = json.pointer("/req_1/data/sip/0").and_then(|v| v.as_str()) {
+                    if let Some(purl) = json.pointer("/req_1/data/midurlinfo/0/purl").and_then(|v| v.as_str()) {
+                        if !purl.is_empty() {
+                            return Some(format!("{}{}", sip, purl));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+async fn get_kuwo_url(client: &Client, id: &str) -> Option<String> {
+    let req_url = format!("http://www.kuwo.cn/api/v1/www/music/playUrl?mid={}&type=convert_url3&br=320kmp3", id);
+    if let Ok(resp) = client.get(&req_url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send().await
+    {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(url) = json.pointer("/data/url").and_then(|v| v.as_str()) {
+                if !url.is_empty() {
+                    return Some(url.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 async fn stream_info(
-    axum::extract::State(_state): axum::extract::State<AppState>,
+    axum::extract::State(state): axum::extract::State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let id = params.get("id").cloned().unwrap_or_default();
@@ -266,30 +483,37 @@ async fn stream_info(
         .build()
         .unwrap();
 
-    if let Ok(resp) = no_redirect_client.get(&req_url).send().await {
-        if resp.status().is_redirection() {
-            if let Some(loc) = resp.headers().get("location") {
-                if let Ok(loc_str) = loc.to_str() {
-                    // Check if it's a 404 URL or invalid
-                    if loc_str.contains("404") || loc_str.is_empty() {
-                        return Json(json!({
-                            "ok": false,
-                            "reason": "播放地址无效"
-                        })).into_response();
+    let mut resolved_url = None;
+
+    if source == "tencent" || source == "qq" {
+        if let Some(url) = get_tencent_url(&state.client, &id).await {
+            resolved_url = Some(url.clone());
+        }
+    } else if source == "kuwo" {
+        if let Some(url) = get_kuwo_url(&state.client, &id).await {
+            resolved_url = Some(url.clone());
+        }
+    }
+
+    if resolved_url.is_none() {
+        if let Ok(resp) = no_redirect_client.get(&req_url).send().await {
+            if resp.status().is_redirection() {
+                if let Some(loc) = resp.headers().get("location") {
+                    if let Ok(loc_str) = loc.to_str() {
+                        resolved_url = Some(loc_str.to_string());
                     }
-                    return Json(json!({
-                        "ok": true,
-                        "url": loc_str,
-                        "statusCode": 200,
-                        "contentType": "audio/mpeg"
-                    })).into_response();
                 }
+            } else if resp.status().is_success() {
+                resolved_url = Some(req_url.clone());
             }
-        } else if resp.status().is_success() {
-            // Might be a direct stream
+        }
+    }
+
+    if let Some(final_url) = resolved_url {
+        if !final_url.contains("404") && !final_url.is_empty() {
             return Json(json!({
                 "ok": true,
-                "url": req_url,
+                "url": final_url,
                 "statusCode": 200,
                 "contentType": "audio/mpeg"
             })).into_response();
@@ -303,7 +527,7 @@ async fn stream_info(
 }
 
 async fn stream(
-    axum::extract::State(_state): axum::extract::State<AppState>,
+    axum::extract::State(state): axum::extract::State<AppState>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
@@ -325,6 +549,16 @@ async fn stream(
 
     let mut current_url = req_url.clone();
     let mut redirect_count = 0;
+
+    if source == "tencent" || source == "qq" {
+        if let Some(url) = get_tencent_url(&state.client, &id).await {
+            current_url = url;
+        }
+    } else if source == "kuwo" {
+        if let Some(url) = get_kuwo_url(&state.client, &id).await {
+            current_url = url;
+        }
+    }
 
     // Follow redirects manually up to 5 times to preserve headers like Range
     while redirect_count < 5 {
