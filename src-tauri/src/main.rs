@@ -9,35 +9,15 @@ use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::{command, Manager, State};
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+
+mod music_server;
 
 static DIST_PREVIEW_SERVER: OnceLock<()> = OnceLock::new();
-static MUSIC_SERVER_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
-fn resolve_node_command() -> Option<String> {
-    let candidates = ["node", "node.exe"];
-    for candidate in candidates {
-        let mut command = Command::new(candidate);
-        #[cfg(target_os = "windows")]
-        {
-            command.creation_flags(0x08000000);
-        }
-        let result = command
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if matches!(result, Ok(status) if status.success()) {
-            return Some(candidate.to_string());
-        }
-    }
-    None
-}
+
+
 
 fn normalize_search_text(input: &str) -> String {
     input
@@ -948,13 +928,7 @@ fn is_port_open(addr: &str) -> bool {
     TcpStream::connect(addr).is_ok()
 }
 
-fn is_music_server_running() -> bool {
-    is_port_open("127.0.0.1:31999")
-}
 
-fn music_server_child() -> &'static Mutex<Option<Child>> {
-    MUSIC_SERVER_CHILD.get_or_init(|| Mutex::new(None))
-}
 
 fn is_vite_dev_server_running() -> bool {
     is_port_open("127.0.0.1:5173")
@@ -1086,39 +1060,7 @@ fn find_upwards(start: &Path, relative: &str, max_depth: usize) -> Option<PathBu
     None
 }
 
-fn resolve_music_server_script_path(app: &tauri::AppHandle) -> Option<PathBuf> {
-    let mut script_candidates: Vec<PathBuf> = Vec::new();
 
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        script_candidates.push(resource_dir.join("local-music-server.mjs"));
-        script_candidates.push(resource_dir.join("resources").join("local-music-server.mjs"));
-    }
-
-    if let Ok(current_dir) = std::env::current_dir() {
-        script_candidates.push(current_dir.join("scripts").join("local-music-server.mjs"));
-        script_candidates.push(current_dir.join("..").join("scripts").join("local-music-server.mjs"));
-        if let Some(found) = find_upwards(&current_dir, "scripts\\local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-        if let Some(found) = find_upwards(&current_dir, "scripts/local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-    }
-
-    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|path| path.parent().map(|parent| parent.to_path_buf())) {
-        script_candidates.push(exe_dir.join("local-music-server.mjs"));
-        script_candidates.push(exe_dir.join("resources").join("local-music-server.mjs"));
-        script_candidates.push(exe_dir.join("..").join("resources").join("local-music-server.mjs"));
-        if let Some(found) = find_upwards(&exe_dir, "scripts\\local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-        if let Some(found) = find_upwards(&exe_dir, "scripts/local-music-server.mjs", 8) {
-            script_candidates.push(found);
-        }
-    }
-
-    script_candidates.into_iter().find(|path| path.exists())
-}
 
 fn try_fallback_to_dist(app: &tauri::AppHandle) {
     if !cfg!(debug_assertions) {
@@ -1177,120 +1119,15 @@ fn try_fallback_to_dist(app: &tauri::AppHandle) {
     let _ = window.navigate(url);
 }
 
-fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
-    if let Ok(mut guard) = music_server_child().lock() {
-        if let Some(child) = guard.as_mut() {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    *guard = None;
-                }
-                Ok(None) => {
-                    return Ok(true);
-                }
-                Err(error) => {
-                    return Err(format!("检查在线音乐服务进程状态失败: {}", error));
-                }
-            }
-        }
-    } else {
-        return Err("无法锁定在线音乐服务进程状态".to_string());
-    }
-
-    if is_music_server_running() {
-        println!("[music-server] 检测到本地在线音乐服务已在运行，复用现有服务");
-        return Ok(true);
-    }
-
-    let Some(script_path) = resolve_music_server_script_path(app) else {
-        return Err("未找到 local-music-server.mjs，无法启动在线音乐服务".to_string());
-    };
-
-    let script_display = script_path.to_string_lossy().to_string();
-    let script_parent = script_path.parent().map(|p| p.to_path_buf());
-
-    let Some(node_command) = resolve_node_command() else {
-        return Err("未找到 Node.js 运行环境，请先安装 Node.js 或将其加入系统 PATH".to_string());
-    };
-
-    let mut command = Command::new(&node_command);
-    command
-        .arg(&script_display)
-        .stdin(Stdio::null());
-    if cfg!(debug_assertions) {
-        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-    } else {
-        command.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-    if let Some(parent) = &script_parent {
-        command.current_dir(parent);
-    }
-    #[cfg(target_os = "windows")]
-    if !cfg!(debug_assertions) {
-        command.creation_flags(0x08000000);
-    }
-
-    let child = command
-        .spawn()
-        .map_err(|error| format!("启动在线音乐服务失败: {}", error))?;
-
-    if let Ok(mut guard) = music_server_child().lock() {
-        *guard = Some(child);
-    } else {
-        return Err("在线音乐服务已启动，但无法记录进程句柄".to_string());
-    }
-
-    println!("[music-server] 使用 {} 启动本地在线音乐服务脚本: {}", node_command, script_path.display());
-    for _ in 0..30 {
-        if is_music_server_running() {
-            return Ok(true);
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    if let Ok(mut guard) = music_server_child().lock() {
-        if let Some(mut child) = guard.take() {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    eprintln!("[music-server] 在线音乐服务进程已提前退出: {}", status);
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                Err(error) => {
-                    eprintln!("[music-server] 检查在线音乐服务进程状态失败: {}", error);
-                }
-            }
-        }
-    }
-
-    Err("在线音乐服务启动超时，请稍后重试".to_string())
+fn start_music_server_process(_app: &tauri::AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn(async {
+        music_server::start_server().await;
+    });
+    Ok(true)
 }
 
 fn stop_music_server_process() -> Result<bool, String> {
-    let Ok(mut guard) = music_server_child().lock() else {
-        return Err("无法锁定在线音乐服务进程状态".to_string());
-    };
-
-    let Some(mut child) = guard.take() else {
-        return Ok(false);
-    };
-
-    match child.try_wait() {
-        Ok(Some(_)) => {
-            return Ok(false);
-        }
-        Ok(None) => {}
-        Err(error) => {
-            return Err(format!("检查在线音乐服务进程状态失败: {}", error));
-        }
-    }
-
-    child
-        .kill()
-        .map_err(|error| format!("停止在线音乐服务失败: {}", error))?;
-    let _ = child.wait();
-    println!("[music-server] 已停止本地在线音乐服务");
+    // Rust server runs in background, stopping not required for now
     Ok(true)
 }
 

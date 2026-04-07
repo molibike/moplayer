@@ -70,9 +70,7 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": [
-      "../scripts/local-music-server.mjs"
-    ],
+    "resources": [],
     "externalBin": [],
     "copyright": "Copyright © 2024 MoPlayer Team",
     "shortDescription": "高性能音视频播放器",
