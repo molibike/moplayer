@@ -12,6 +12,8 @@ use serde_json::json;
 use std::collections::HashMap;
 use url::Url;
 
+
+
 const METING_API_BASE: &str = "https://meting-api-omega.vercel.app/api";
 
 #[derive(Clone)]
@@ -145,27 +147,31 @@ async fn search_tencent(client: &Client, keyword: &str) -> Vec<TrackPayload> {
 async fn search_kuwo(client: &Client, keyword: &str) -> Vec<TrackPayload> {
     let mut tracks = Vec::new();
     let req_url = format!(
-        "http://search.kuwo.cn/r.s?all={}&ft=music&itemset=web_2013&client=kt&pn=0&rn=15&rformat=json&encoding=utf8",
+        "http://search.kuwo.cn/r.s?client=kt&all={}&pn=0&rn=15&uid=794762570&ver=kwplayer_ar_9.2.2.1&vipver=1&show_copyright_off=1&newver=1&ft=music&cluster=0&strategy=2012&encoding=utf8&rformat=json&vermerge=1&mobi=1&defok=1",
         urlencoding::encode(keyword)
     );
+
+    println!("[Kuwo Search] Requesting: {}", req_url);
 
     if let Ok(resp) = client.get(&req_url)
         .header("User-Agent", "Mozilla/5.0")
         .send().await 
     {
+        println!("[Kuwo Search] Response Status: {}", resp.status());
         if let Ok(text) = resp.text().await {
-            let json_str = text.replace("&nbsp;", " ").replace("&#39;", "'").replace("&#34;", "\"");
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                if let Some(list) = json["abslist"].as_array() {
+            println!("[Kuwo Search] Response body head: {}", text.chars().take(200).collect::<String>());
+            
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(list) = json.pointer("/abslist").and_then(|v| v.as_array()) {
                     for item in list {
-                        let raw_id = item["DC_TARGETID"].as_str().or_else(|| item["MUSICRID"].as_str()).unwrap_or_default();
-                        let id = raw_id.replace("MUSIC_", "");
+                        let id = item["MUSICRID"].as_str().unwrap_or("").replace("MUSIC_", "");
                         if id.is_empty() { continue; }
                         
-                        let title = item["NAME"].as_str().or_else(|| item["SONGNAME"].as_str()).unwrap_or_default().to_string();
-                        let artist = item["ARTIST"].as_str().unwrap_or_default().to_string();
-                        let album = item["ALBUM"].as_str().unwrap_or_default().to_string();
-                        let duration_ms = item["DURATION"].as_str().and_then(|s| s.parse::<u64>().ok()).map(|s| s * 1000);
+                        let title = item["SONGNAME"].as_str().unwrap_or("").replace("&nbsp;", " ");
+                        let artist = item["ARTIST"].as_str().unwrap_or("").replace("&nbsp;", " ");
+                        let album = item["ALBUM"].as_str().unwrap_or("").replace("&nbsp;", " ");
+                        let duration_ms = item["DURATION"].as_str().unwrap_or("0").parse::<u64>().ok().map(|s| s * 1000);
+                        
                         let source = "kuwo".to_string();
                         let artist_list = vec![artist.clone()];
 
@@ -192,7 +198,12 @@ async fn search_kuwo(client: &Client, keyword: &str) -> Vec<TrackPayload> {
                     }
                 }
             }
+            println!("[Kuwo Search] Found {} tracks", tracks.len());
+        } else {
+            println!("[Kuwo Search] Failed to read bytes");
         }
+    } else {
+        println!("[Kuwo Search] Request failed");
     }
     tracks
 }
@@ -262,6 +273,9 @@ async fn search(
                 return source_tracks;
             } else if src == "kuwo" {
                 source_tracks = search_kuwo(&client, &keyword_clone).await;
+                return source_tracks;
+            } else if src == "kugou" {
+                source_tracks = search_kugou(&client, &keyword_clone).await;
                 return source_tracks;
             }
             
@@ -446,13 +460,139 @@ async fn get_tencent_url(client: &Client, id: &str) -> Option<String> {
 }
 
 async fn get_kuwo_url(client: &Client, id: &str) -> Option<String> {
-    let req_url = format!("http://www.kuwo.cn/api/v1/www/music/playUrl?mid={}&type=convert_url3&br=320kmp3", id);
+    // Attempt 1: Web API with dynamically generated Secret and Cookie
+    let play_url = format!("https://kuwo.cn/api/v1/www/music/playUrl?mid={}&type=music&httpsStatus=1&reqId=12345678", id);
+    println!("[Kuwo URL] Requesting Web API: {}", play_url);
+    
+    // We will use the native KuwoCrypto we wrote previously to generate the valid token
+    // We need to request the song page to get the specific dynamic cookie
+    let page_url = format!("http://www.kuwo.cn/play_detail/{}", id);
+    let mut cookie_str = String::new();
+    let mut cookie_key = String::new();
+    
+    if let Ok(resp) = client.get(&page_url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        .send().await 
+    {
+        for val in resp.headers().get_all(reqwest::header::SET_COOKIE) {
+            if let Ok(cookie_str_val) = val.to_str() {
+                if let Some(cookie_part) = cookie_str_val.split(';').next() {
+                    cookie_str.push_str(&format!("{}; ", cookie_part));
+                    if cookie_part.starts_with("Hm_Iuvt_cdb") {
+                        if let Some(key) = cookie_part.split('=').next() {
+                            cookie_key = key.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if cookie_key.is_empty() {
+        cookie_key = "Hm_Iuvt_cdb524f42f0cer9b268e4v7y735ewrq2324".to_string();
+    }
+    
+    let crypto = crate::kuwo_crypto::KuwoCrypto::new(&cookie_str, &cookie_key);
+    let secret = crypto.gen_secret_header();
+    
+    if let Ok(resp) = client.get(&play_url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        .header("Cookie", &cookie_str)
+        .header("Secret", secret)
+        .send().await
+    {
+        if let Ok(text) = resp.text().await {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                if json["success"].as_bool() == Some(true) {
+                    if let Some(url) = json.pointer("/data/url").and_then(|v| v.as_str()) {
+                        if !url.is_empty() {
+                            return Some(url.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fallback to Meting API
+    let fallback_url = format!("https://api.injahow.cn/meting/?type=url&id={}&server=kuwo", id);
+    println!("[Kuwo URL] Fallback to Meting: {}", fallback_url);
+    if let Ok(resp) = client.get(&fallback_url).send().await {
+        if let Ok(url) = resp.text().await {
+            if url.starts_with("http") {
+                return Some(url);
+            }
+        }
+    }
+
+    None
+}
+
+async fn search_kugou(client: &Client, keyword: &str) -> Vec<TrackPayload> {
+    let mut tracks = Vec::new();
+    let req_url = format!(
+        "http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={}&page=1&pagesize=15&showtype=1",
+        urlencoding::encode(keyword)
+    );
+
+    if let Ok(resp) = client.get(&req_url)
+        .header("User-Agent", "Mozilla/5.0")
+        .send().await 
+    {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(list) = json.pointer("/data/info").and_then(|v| v.as_array()) {
+                for item in list {
+                    if let Some(hash) = item["hash"].as_str() {
+                        let id = hash.to_string();
+                        let title = item["songname"].as_str().unwrap_or_default().to_string();
+                        let artist = item["singername"].as_str().unwrap_or_default().to_string();
+                        let album = item["album_name"].as_str().unwrap_or_default().to_string();
+                        let duration_ms = item["duration"].as_u64().map(|s| s * 1000);
+                        
+                        let mut cover = String::new();
+                        if let Some(union_cover) = item.pointer("/trans_param/union_cover").and_then(|v| v.as_str()) {
+                            cover = union_cover.replace("{size}", "400");
+                        }
+                        
+                        let source = "kugou".to_string();
+                        let artist_list = vec![artist.clone()];
+
+                        tracks.push(TrackPayload {
+                            id: id.clone(),
+                            title: title.clone(),
+                            name: title.clone(),
+                            artist: artist.clone(),
+                            artist_list: artist_list.clone(),
+                            artists: artist_list,
+                            album: album.clone(),
+                            album_name: album,
+                            cover: cover.clone(),
+                            pic: cover.clone(),
+                            image: cover,
+                            source: source.clone(),
+                            source_label: get_source_label(&source).to_string(),
+                            duration_ms,
+                            url: format!("https://www.kugou.com/song/#hash={}", id),
+                            stream_url: format!("/api/music/stream?id={}&source={}", urlencoding::encode(&id), urlencoding::encode(&source)),
+                            lyric_url: format!("/api/music/lyric?id={}&source={}", urlencoding::encode(&id), urlencoding::encode(&source)),
+                            song_id: id,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    tracks
+}
+
+async fn get_kugou_url(client: &Client, hash: &str) -> Option<String> {
+    let req_url = format!("http://m.kugou.com/app/i/getSongInfo.php?cmd=playInfo&hash={}", hash);
     if let Ok(resp) = client.get(&req_url)
         .header("User-Agent", "Mozilla/5.0")
         .send().await
     {
         if let Ok(json) = resp.json::<serde_json::Value>().await {
-            if let Some(url) = json.pointer("/data/url").and_then(|v| v.as_str()) {
+            if let Some(url) = json["url"].as_str() {
                 if !url.is_empty() {
                     return Some(url.to_string());
                 }
@@ -491,6 +631,10 @@ async fn stream_info(
         }
     } else if source == "kuwo" {
         if let Some(url) = get_kuwo_url(&state.client, &id).await {
+            resolved_url = Some(url.clone());
+        }
+    } else if source == "kugou" {
+        if let Some(url) = get_kugou_url(&state.client, &id).await {
             resolved_url = Some(url.clone());
         }
     }
@@ -556,6 +700,10 @@ async fn stream(
         }
     } else if source == "kuwo" {
         if let Some(url) = get_kuwo_url(&state.client, &id).await {
+            current_url = url;
+        }
+    } else if source == "kugou" {
+        if let Some(url) = get_kugou_url(&state.client, &id).await {
             current_url = url;
         }
     }
@@ -635,5 +783,17 @@ pub async fn start_server() {
         let _ = axum::serve(listener, app).await;
     } else {
         eprintln!("[music-server-rust] 端口 31999 被占用或绑定失败");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_kuwo_url() {
+        let client = reqwest::Client::new();
+        let url = get_kuwo_url(&client, "261066002").await;
+        println!("Test Kuwo URL: {:?}", url);
     }
 }

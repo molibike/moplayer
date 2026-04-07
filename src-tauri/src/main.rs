@@ -13,6 +13,7 @@ use std::sync::{Mutex, OnceLock};
 use tauri::{command, Manager, State};
 
 mod music_server;
+pub mod kuwo_crypto;
 
 static DIST_PREVIEW_SERVER: OnceLock<()> = OnceLock::new();
 
