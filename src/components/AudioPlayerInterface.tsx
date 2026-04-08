@@ -299,7 +299,7 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       .trim();
   }, []);
 
-  const searchLyricsCandidatesWithBackend = useCallback(async (rawTitle: string, rawArtist: string) => {
+  const searchLyricsCandidatesWithBackend = useCallback(async (rawTitle: string, rawArtist: string, preferredSource?: string) => {
     const normalizedTitle = normalizeTitleForSearch(rawTitle || '');
     const title = cleanForSearch(normalizedTitle || rawTitle || '');
     const artist = isLikelySuspiciousArtist(rawArtist || '') ? '' : cleanForSearch(rawArtist || '');
@@ -312,9 +312,10 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
       normalizedTitle,
       finalTitle: title,
       finalArtist: artist,
+      preferredSource,
     });
 
-    const candidates = await invoke<LyricsCandidate[]>('search_lyrics_candidates', { title, artist });
+    const candidates = await invoke<LyricsCandidate[]>('search_lyrics_candidates', { title, artist, source: preferredSource || null });
     return Array.isArray(candidates) ? candidates.filter(item => item?.lyrics?.trim()) : [];
   }, [cleanForSearch, isLikelySuspiciousArtist, normalizeTitleForSearch]);
 
@@ -365,9 +366,9 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     });
   }, []);
 
-  const updateLyricsFromBackend = useCallback((title: string, artist: string) => {
+  const updateLyricsFromBackend = useCallback((title: string, artist: string, preferredSource?: string) => {
     setIsSearchingLyrics(true);
-    void searchLyricsCandidatesWithBackend(title, artist)
+    void searchLyricsCandidatesWithBackend(title, artist, preferredSource)
       .then(candidates => {
         setLyricsCandidates(candidates);
         if (candidates.length > 0) {
@@ -411,7 +412,8 @@ const AudioPlayerInterface: React.FC<AudioPlayerInterfaceProps> = ({
     } else if (track.title) {
       setLyricsCandidates([]);
       setCurrentLyricsIndex(0);
-      updateLyricsFromBackend(track.title, track.artist || '');
+      // 在线音乐优先从同一来源搜索歌词
+      updateLyricsFromBackend(track.title, track.artist || '', track.source || '');
     }
   }, [applyMetadata, updateLyricsFromBackend]);
 

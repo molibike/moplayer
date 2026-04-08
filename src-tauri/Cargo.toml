@@ -27,6 +27,7 @@ url = "2.5.8"
 bytes = "1.11.1"
 regex = "1.11.1"
 rand = "0.8.5"
+base64 = "0.22"
 
 [features]
 default = ["custom-protocol"]

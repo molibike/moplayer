@@ -89,7 +89,7 @@ fn song_match_score(song: &serde_json::Value, title: &str, artist: &str) -> i32 
 
     let normalized_song_artist = normalize_search_text(&artist_names);
 
-    let mut score = 0;
+    let mut score = 10; // 基础分数，确保至少会返回结果
 
     if !normalized_title.is_empty() {
         if normalized_song_name == normalized_title {
@@ -98,6 +98,34 @@ fn song_match_score(song: &serde_json::Value, title: &str, artist: &str) -> i32 
             || normalized_title.contains(&normalized_song_name)
         {
             score += 60;
+        } else {
+            // 宽松的匹配：检查是否有共同的子串（至少3个字符）
+            let min_len = normalized_song_name.len().min(normalized_title.len());
+            if min_len >= 3 {
+                let short = if normalized_song_name.len() <= normalized_title.len() {
+                    &normalized_song_name
+                } else {
+                    &normalized_title
+                };
+                let long = if normalized_song_name.len() > normalized_title.len() {
+                    &normalized_song_name
+                } else {
+                    &normalized_title
+                };
+                // 如果短字符串是长字符串的一部分，给分
+                if long.contains(short) {
+                    score += 40;
+                } else {
+                    // 检查是否有一些字符匹配（简单的相似度检查）
+                    let matching_chars = normalized_song_name
+                        .chars()
+                        .filter(|c| normalized_title.contains(*c))
+                        .count();
+                    if matching_chars >= 3 {
+                        score += 20;
+                    }
+                }
+            }
         }
     }
 
@@ -108,6 +136,15 @@ fn song_match_score(song: &serde_json::Value, title: &str, artist: &str) -> i32 
             || normalized_artist.contains(&normalized_song_artist)
         {
             score += 40;
+        } else if !normalized_song_artist.is_empty() {
+            // 检查艺术家名字中是否有部分匹配
+            let artist_words: Vec<&str> = normalized_artist.split_whitespace().collect();
+            for word in artist_words {
+                if word.len() >= 2 && normalized_song_artist.contains(word) {
+                    score += 20;
+                    break;
+                }
+            }
         }
     }
 
@@ -444,9 +481,11 @@ fn lyrics_quality_score(candidate: &LyricsCandidate, title: &str, artist: &str) 
     score += line_count.min(40);
 
     match candidate.source.as_str() {
-        "netease" => score += 18,
-        "lrclib" => score += 12,
-        "tencent" => score += 10,
+        "lrclib" => score += 20,      // lrclib 通常提供最准确的歌词
+        "netease" => score += 15,
+        "tencent" => score += 12,
+        "kugou" => score += 10,       // 添加酷狗支持
+        "kuwo" => score += 8,         // 添加酷我支持
         "lrc_cx" => score += 6,
         _ => {}
     }
@@ -624,174 +663,413 @@ async fn search_lyrics_from_lrc_cx(
     Ok(None)
 }
 
-async fn collect_lyrics_candidates(title: &str, artist: &str) -> Result<Vec<LyricsCandidate>, String> {
+// 使用网易云音乐直接API搜索歌词
+async fn search_lyrics_from_netease(
+    client: &reqwest::Client,
+    title: &str,
+    artist: &str,
+) -> Result<Vec<LyricsCandidate>, String> {
+    let mut candidates = Vec::new();
+    
+    let keywords = if artist.trim().is_empty() || artist == "未知艺术家" {
+        title.trim().to_string()
+    } else {
+        format!("{} {}", title.trim(), artist.trim())
+    };
+    
+    // 网易云音乐搜索API（GET方式）
+    let search_url = format!(
+        "http://music.163.com/api/search/get?type=1&limit=5&s={}",
+        urlencoding::encode(&keywords)
+    );
+    println!("[歌词搜索] [netease] 搜索URL: {}", search_url);
+    
+    let search_body = match client
+        .get(&search_url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => match resp.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                println!("[歌词搜索] [netease] 读取搜索响应失败: {}", e);
+                return Ok(candidates);
+            }
+        },
+        Err(e) => {
+            println!("[歌词搜索] [netease] 搜索请求失败: {}", e);
+            return Ok(candidates);
+        }
+    };
+    
+    let search_json: serde_json::Value = match serde_json::from_str(&search_body) {
+        Ok(json) => json,
+        Err(e) => {
+            println!("[歌词搜索] [netease] 解析搜索响应失败: {}", e);
+            return Ok(candidates);
+        }
+    };
+    
+    // 解析网易云返回格式: {"result":{"songs":[...]}}
+    let songs = search_json
+        .get("result")
+        .and_then(|r| r.get("songs"))
+        .and_then(|s| s.as_array())
+        .cloned()
+        .unwrap_or_default();
+    
+    if songs.is_empty() {
+        println!("[歌词搜索] [netease] 未找到歌曲");
+        return Ok(candidates);
+    }
+    
+    println!("[歌词搜索] [netease] 找到 {} 首歌曲", songs.len());
+    
+    // 遍历搜索结果获取歌词
+    for song in songs.iter().take(5) {
+        let song_id = song.get("id")
+            .and_then(|v| v.as_i64())
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        
+        if song_id.is_empty() { continue; }
+        
+        let song_name = song.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        
+        // 提取艺术家（网易云格式: artists: [{name: "xxx"}, ...]）
+        let artist_names = song.get("artists")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter()
+                .filter_map(|a| a.get("name").and_then(|n| n.as_str()))
+                .collect::<Vec<_>>()
+                .join(" / "))
+            .unwrap_or_default();
+        
+        println!("[歌词搜索] [netease] 尝试: id={}, title={}, artist={}", song_id, song_name, artist_names);
+        
+        // 获取歌词
+        let lrc_url = format!(
+            "http://music.163.com/api/song/lyric?id={}&lv=1&tv=1",
+            song_id
+        );
+        
+        let lrc_body = match client
+            .get(&lrc_url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(resp) => match resp.text().await {
+                Ok(text) => text,
+                Err(e) => {
+                    println!("[歌词搜索] [netease] 读取歌词失败: {}", e);
+                    continue;
+                }
+            },
+            Err(e) => {
+                println!("[歌词搜索] [netease] 歌词请求失败: {}", e);
+                continue;
+            }
+        };
+        
+        // 解析网易云歌词格式: {"lrc":{"lyric":"..."}}
+        let lrc_json: serde_json::Value = match serde_json::from_str(&lrc_body) {
+            Ok(json) => json,
+            Err(_) => continue,
+        };
+        
+        let raw_lrc = lrc_json
+            .get("lrc")
+            .and_then(|l| l.get("lyric"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        
+        let formatted = format_lyrics_text(raw_lrc);
+        if !is_valid_lyrics_text(&formatted) {
+            println!("[歌词搜索] [netease] 歌词无效，跳过");
+            continue;
+        }
+        
+        if !candidates.iter().any(|item: &LyricsCandidate| item.lyrics == formatted) {
+            println!("[歌词搜索] [netease] 成功获取歌词: {} 字节", formatted.len());
+            candidates.push(LyricsCandidate {
+                source: "netease".to_string(),
+                title: song_name,
+                artist: artist_names,
+                lyrics: formatted,
+            });
+        }
+    }
+    
+    Ok(candidates)
+}
+
+// 使用酷狗音乐直接API搜索歌词
+async fn search_lyrics_from_kugou(
+    client: &reqwest::Client,
+    title: &str,
+    artist: &str,
+) -> Result<Vec<LyricsCandidate>, String> {
+    let mut candidates = Vec::new();
+    
+    let keywords = if artist.trim().is_empty() || artist == "未知艺术家" {
+        title.trim().to_string()
+    } else {
+        format!("{} {}", title.trim(), artist.trim())
+    };
+    
+    // 酷狗搜索API
+    let search_url = format!(
+        "http://mobilecdn.kugou.com/api/v3/search/song?keyword={}&page=1&pagesize=5&format=json",
+        urlencoding::encode(&keywords)
+    );
+    println!("[歌词搜索] [kugou] 搜索URL: {}", search_url);
+    
+    let search_body = match client
+        .get(&search_url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => match resp.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                println!("[歌词搜索] [kugou] 读取搜索响应失败: {}", e);
+                return Ok(candidates);
+            }
+        },
+        Err(e) => {
+            println!("[歌词搜索] [kugou] 搜索请求失败: {}", e);
+            return Ok(candidates);
+        }
+    };
+    
+    let search_json: serde_json::Value = match serde_json::from_str(&search_body) {
+        Ok(json) => json,
+        Err(e) => {
+            println!("[歌词搜索] [kugou] 解析搜索响应失败: {}", e);
+            return Ok(candidates);
+        }
+    };
+    
+    // 酷狗返回格式: {"data":{"info":[{"hash":"...", "songname":"...", "singername":"..."}]}}
+    let songs = search_json
+        .get("data")
+        .and_then(|d| d.get("info"))
+        .and_then(|i| i.as_array())
+        .cloned()
+        .unwrap_or_default();
+    
+    if songs.is_empty() {
+        println!("[歌词搜索] [kugou] 未找到歌曲");
+        return Ok(candidates);
+    }
+    
+    println!("[歌词搜索] [kugou] 找到 {} 首歌曲", songs.len());
+    
+    for song in songs.iter().take(5) {
+        let hash = song.get("hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        
+        if hash.is_empty() { continue; }
+        
+        let song_name = song.get("songname")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        
+        let singer_name = song.get("singername")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        
+        println!("[歌词搜索] [kugou] 尝试: hash={}, title={}, artist={}", hash, song_name, singer_name);
+        
+        // 第一步：用hash搜索歌词候选
+        let lrc_search_url = format!(
+            "http://krcs.kugou.com/search?keyword={}&ver=1&man=yes&client=pc&hash={}",
+            urlencoding::encode(&format!("{} {}", song_name, singer_name)),
+            hash
+        );
+        
+        let lrc_search_body = match client
+            .get(&lrc_search_url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(resp) => match resp.text().await {
+                Ok(text) => text,
+                Err(e) => {
+                    println!("[歌词搜索] [kugou] 歌词搜索失败: {}", e);
+                    continue;
+                }
+            },
+            Err(e) => {
+                println!("[歌词搜索] [kugou] 歌词搜索请求失败: {}", e);
+                continue;
+            }
+        };
+        
+        let lrc_search_json: serde_json::Value = match serde_json::from_str(&lrc_search_body) {
+            Ok(json) => json,
+            Err(_) => continue,
+        };
+        
+        // 获取第一个歌词候选的id和accesskey
+        let lrc_candidates = lrc_search_json
+            .get("candidates")
+            .and_then(|c| c.as_array())
+            .cloned()
+            .unwrap_or_default();
+        
+        if lrc_candidates.is_empty() {
+            println!("[歌词搜索] [kugou] 无歌词候选");
+            continue;
+        }
+        
+        let first_candidate = &lrc_candidates[0];
+        let lrc_id = first_candidate.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let accesskey = first_candidate.get("accesskey")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        
+        if lrc_id.is_empty() || accesskey.is_empty() { continue; }
+        
+        // 第二步：下载歌词（返回base64编码的LRC）
+        let lrc_dl_url = format!(
+            "http://lyrics.kugou.com/download?id={}&accesskey={}&fmt=lrc&ver=1&client=pc",
+            lrc_id, accesskey
+        );
+        
+        let lrc_dl_body = match client
+            .get(&lrc_dl_url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(resp) => match resp.text().await {
+                Ok(text) => text,
+                Err(e) => {
+                    println!("[歌词搜索] [kugou] 歌词下载失败: {}", e);
+                    continue;
+                }
+            },
+            Err(e) => {
+                println!("[歌词搜索] [kugou] 歌词下载请求失败: {}", e);
+                continue;
+            }
+        };
+        
+        let lrc_dl_json: serde_json::Value = match serde_json::from_str(&lrc_dl_body) {
+            Ok(json) => json,
+            Err(_) => continue,
+        };
+        
+        // 酷狗歌词下载返回base64编码的content字段
+        let content_b64 = lrc_dl_json.get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        
+        if content_b64.is_empty() { continue; }
+        
+        // 解码base64
+        use base64::Engine;
+        let raw_lrc = match base64::engine::general_purpose::STANDARD.decode(content_b64) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+            Err(e) => {
+                println!("[歌词搜索] [kugou] base64解码失败: {}", e);
+                continue;
+            }
+        };
+        
+        let formatted = format_lyrics_text(&raw_lrc);
+        if !is_valid_lyrics_text(&formatted) {
+            println!("[歌词搜索] [kugou] 歌词无效，跳过");
+            continue;
+        }
+        
+        if !candidates.iter().any(|item: &LyricsCandidate| item.lyrics == formatted) {
+            println!("[歌词搜索] [kugou] 成功获取歌词: {} 字节", formatted.len());
+            candidates.push(LyricsCandidate {
+                source: "kugou".to_string(),
+                title: song_name,
+                artist: singer_name,
+                lyrics: formatted,
+            });
+        }
+    }
+    
+    Ok(candidates)
+}
+
+async fn collect_lyrics_candidates(title: &str, artist: &str, preferred_source: &str) -> Result<Vec<LyricsCandidate>, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("创建客户端失败: {}", e))?;
 
     let mut results: Vec<LyricsCandidate> = Vec::new();
-    let mut search_plans: Vec<(String, String)> = Vec::new();
-    if !artist.trim().is_empty() && artist != "未知艺术家" {
-        search_plans.push((format!("{} {}", title, artist), artist.to_string()));
-    }
-    search_plans.push((title.to_string(), String::new()));
+    
+    println!("[歌词搜索] 开始多源搜索 - 标题: {}, 艺术家: {}, 优先源: {}", title, artist, preferred_source);
 
-    for (index, (keywords, current_artist)) in search_plans.iter().enumerate() {
-        println!(
-            "[歌词搜索] 开始第{}轮搜索，关键词: {}，匹配艺术家: {}",
-            index + 1,
-            keywords,
-            current_artist
-        );
-
-        let search_url = format!(
-            "https://music.163.com/api/search/get/web?type=1&offset=0&total=true&limit=10&s={}",
-            urlencoding::encode(keywords)
-        );
-
-        println!("[歌词搜索] 搜索URL: {}", search_url);
-
-        let search_resp = client
-            .get(&search_url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            .header("Referer", "https://music.163.com")
-            .send()
-            .await
-            .map_err(|e| format!("搜索请求失败: {}", e))?;
-
-        let search_body = search_resp
-            .text()
-            .await
-            .map_err(|e| format!("读取搜索响应失败: {}", e))?;
-
-        println!("[歌词搜索] 搜索响应长度: {} 字节", search_body.len());
-
-        let search_json: serde_json::Value = serde_json::from_str(&search_body)
-            .map_err(|e| format!("解析搜索响应失败: {}", e))?;
-
-        let songs = match search_json
-            .get("result")
-            .and_then(|result| result.get("songs"))
-            .and_then(|songs| songs.as_array())
-        {
-            Some(songs) if !songs.is_empty() => songs,
-            _ => {
-                println!("[歌词搜索] 第{}轮未找到歌曲，继续下一轮", index + 1);
-                continue;
-            }
+    // 如果有优先源，先搜索该源
+    if !preferred_source.is_empty() {
+        println!("[歌词搜索] 优先搜索来源: {}", preferred_source);
+        let preferred_result = match preferred_source {
+            "netease" => search_lyrics_from_netease(&client, title, artist).await,
+            "kugou" => search_lyrics_from_kugou(&client, title, artist).await,
+            // tencent/kuwo 暂时映射到已有的源
+            "tencent" => search_lyrics_from_netease(&client, title, artist).await,
+            "kuwo" => search_lyrics_from_kugou(&client, title, artist).await,
+            _ => Ok(Vec::new()),
         };
-
-        let mut candidates: Vec<(i32, i64, String, String)> = songs
-            .iter()
-            .filter_map(|song| {
-                let song_id = song
-                    .get("id")
-                    .and_then(|id| id.as_i64())
-                    .or_else(|| {
-                        song.get("id")
-                            .and_then(|id| id.as_str())
-                            .and_then(|value| value.parse::<i64>().ok())
-                    })?;
-
-                let song_name = song
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-
-                let artist_name = song
-                    .get("artists")
-                    .and_then(|v| v.as_array())
-                    .map(|artists| {
-                        artists
-                            .iter()
-                            .filter_map(|artist_item| artist_item.get("name").and_then(|v| v.as_str()))
-                            .collect::<Vec<_>>()
-                            .join(" / ")
-                    })
-                    .unwrap_or_default();
-
-                Some((
-                    song_match_score(song, title, current_artist),
-                    song_id,
-                    song_name,
-                    artist_name,
-                ))
-            })
-            .collect();
-
-        candidates.sort_by(|a, b| b.0.cmp(&a.0));
-
-        for (score, song_id, song_name, artist_name) in candidates {
-            println!(
-                "[歌词搜索] 尝试候选歌曲: id={}, score={}, title={}, artist={}",
-                song_id, score, song_name, artist_name
-            );
-
-            let lrc_url = format!(
-                "https://api.injahow.cn/meting/?type=lrc&id={}&server=netease",
-                song_id
-            );
-            println!("[歌词搜索] 歌词URL: {}", lrc_url);
-
-            let lrc_resp = match client
-                .get(&lrc_url)
-                .header("User-Agent", "MoPlayer/1.0")
-                .send()
-                .await
-            {
-                Ok(response) => response,
-                Err(error) => {
-                    println!("[歌词搜索] 歌词请求失败，继续下一个候选: {}", error);
-                    continue;
+        match preferred_result {
+            Ok(candidates) => {
+                println!("[歌词搜索] 优先源 [{}] 返回 {} 个候选", preferred_source, candidates.len());
+                for candidate in candidates {
+                    if !results.iter().any(|item| item.lyrics == candidate.lyrics) {
+                        results.push(candidate);
+                    }
                 }
-            };
-
-            let lrc_body = match lrc_resp.text().await {
-                Ok(body) => body,
-                Err(error) => {
-                    println!("[歌词搜索] 读取歌词响应失败，继续下一个候选: {}", error);
-                    continue;
-                }
-            };
-
-            println!("[歌词搜索] 歌词响应长度: {} 字节", lrc_body.len());
-
-            if !is_valid_lyrics_text(&lrc_body) {
-                println!("[歌词搜索] 当前候选歌词无效，继续下一个候选");
-                continue;
             }
-
-            if !results.iter().any(|item| item.lyrics == lrc_body) {
-                results.push(LyricsCandidate {
-                    source: "netease".to_string(),
-                    title: song_name,
-                    artist: artist_name,
-                    lyrics: lrc_body,
-                });
-            }
+            Err(e) => println!("[歌词搜索] 优先源 [{}] 搜索失败: {}", preferred_source, e),
         }
     }
 
+    // 1. 尝试 lrclib - 通常提供最准确的歌词
     let mut lrclib_plans: Vec<String> = Vec::new();
     if !artist.trim().is_empty() && artist != "未知艺术家" {
         lrclib_plans.push(artist.to_string());
     }
     lrclib_plans.push(String::new());
-
+    
     for current_artist in lrclib_plans {
         match search_lyrics_from_lrclib(&client, title, &current_artist).await {
             Ok(Some(lyrics)) => {
+                let artist_name = if current_artist.is_empty() {
+                    artist.to_string()
+                } else {
+                    current_artist.clone()
+                };
                 if !results.iter().any(|item| item.lyrics == lyrics) {
                     results.push(LyricsCandidate {
                         source: "lrclib".to_string(),
                         title: title.to_string(),
-                        artist: if current_artist.is_empty() {
-                            artist.to_string()
-                        } else {
-                            current_artist.clone()
-                        },
+                        artist: artist_name,
                         lyrics,
                     });
                 }
@@ -800,22 +1078,38 @@ async fn collect_lyrics_candidates(title: &str, artist: &str) -> Result<Vec<Lyri
             Err(error) => println!("[歌词搜索] lrclib搜索失败: {}", error),
         }
     }
-
-    match search_lyrics_from_tencent(&client, title, artist).await {
-        Ok(Some(lyrics)) => {
-            if !results.iter().any(|item| item.lyrics == lyrics) {
-                results.push(LyricsCandidate {
-                    source: "tencent".to_string(),
-                    title: title.to_string(),
-                    artist: artist.to_string(),
-                    lyrics,
-                });
+    
+    // 2. 网易云音乐（如果不是优先源才搜索，避免重复）
+    if preferred_source != "netease" && preferred_source != "tencent" {
+        match search_lyrics_from_netease(&client, title, artist).await {
+            Ok(netease_candidates) => {
+                for candidate in &netease_candidates {
+                    if !results.iter().any(|item| item.lyrics == candidate.lyrics) {
+                        results.push(candidate.clone());
+                    }
+                }
+                println!("[歌词搜索] 网易云音乐返回 {} 个候选", netease_candidates.len());
             }
+            Err(e) => println!("[歌词搜索] 网易云音乐搜索失败: {}", e),
         }
-        Ok(None) => {}
-        Err(error) => println!("[歌词搜索] QQ音乐搜索失败: {}", error),
     }
-
+    
+    // 3. 酷狗音乐（如果不是优先源才搜索，避免重复）
+    if preferred_source != "kugou" && preferred_source != "kuwo" {
+        match search_lyrics_from_kugou(&client, title, artist).await {
+            Ok(kugou_candidates) => {
+                for candidate in &kugou_candidates {
+                    if !results.iter().any(|item| item.lyrics == candidate.lyrics) {
+                        results.push(candidate.clone());
+                    }
+                }
+                println!("[歌词搜索] 酷狗音乐返回 {} 个候选", kugou_candidates.len());
+            }
+            Err(e) => println!("[歌词搜索] 酷狗音乐搜索失败: {}", e),
+        }
+    }
+    
+    // 4. 备用：尝试 api.lrc.cx
     match search_lyrics_from_lrc_cx(&client, title).await {
         Ok(Some(lyrics)) => {
             if !results.iter().any(|item| item.lyrics == lyrics) {
@@ -831,17 +1125,36 @@ async fn collect_lyrics_candidates(title: &str, artist: &str) -> Result<Vec<Lyri
         Err(error) => println!("[歌词搜索] api.lrc.cx搜索失败: {}", error),
     }
 
+    // 按质量评分排序，优先源额外加分确保排在最前
+    let preferred = preferred_source.to_string();
+    // 判断候选来源是否匹配优先源（包括映射关系）
+    let is_preferred = |source: &str| -> bool {
+        if preferred.is_empty() { return false; }
+        match preferred.as_str() {
+            "netease" => source == "netease",
+            "tencent" => source == "netease" || source == "tencent",
+            "kugou" => source == "kugou",
+            "kuwo" => source == "kugou" || source == "kuwo",
+            _ => source == preferred,
+        }
+    };
     results.sort_by(|a, b| {
-        let score_a = lyrics_quality_score(a, title, artist);
-        let score_b = lyrics_quality_score(b, title, artist);
+        let mut score_a = lyrics_quality_score(a, title, artist);
+        let mut score_b = lyrics_quality_score(b, title, artist);
+        // 优先源额外加500分，确保排在最前
+        if is_preferred(&a.source) { score_a += 500; }
+        if is_preferred(&b.source) { score_b += 500; }
         score_b.cmp(&score_a)
     });
 
+    println!("[歌词搜索] 总共找到 {} 个歌词候选", results.len());
     for candidate in &results {
+        let mut score = lyrics_quality_score(candidate, title, artist);
+        if is_preferred(&candidate.source) { score += 500; }
         println!(
-            "[歌词搜索] 候选排序结果: source={}, score={}, title={}, artist={}",
+            "[歌词搜索] 候选: source={}, score={}, title={}, artist={}",
             candidate.source,
-            lyrics_quality_score(candidate, title, artist),
+            score,
             candidate.title,
             candidate.artist
         );
@@ -851,16 +1164,18 @@ async fn collect_lyrics_candidates(title: &str, artist: &str) -> Result<Vec<Lyri
 }
 
 #[command]
-async fn search_lyrics_candidates(title: String, artist: String) -> Result<Vec<LyricsCandidate>, String> {
-    println!("[歌词搜索] 开始收集歌词候选 - 标题: {}, 艺术家: {}", title, artist);
-    collect_lyrics_candidates(&title, &artist).await
+async fn search_lyrics_candidates(title: String, artist: String, source: Option<String>) -> Result<Vec<LyricsCandidate>, String> {
+    let preferred_source = source.unwrap_or_default();
+    println!("[歌词搜索] 开始收集歌词候选 - 标题: {}, 艺术家: {}, 优先源: {}", title, artist, preferred_source);
+    collect_lyrics_candidates(&title, &artist, &preferred_source).await
 }
 
 #[command]
-async fn search_lyrics(title: String, artist: String) -> Result<Option<String>, String> {
-    println!("[歌词搜索] 开始搜索 - 标题: {}, 艺术家: {}", title, artist);
+async fn search_lyrics(title: String, artist: String, source: Option<String>) -> Result<Option<String>, String> {
+    let preferred_source = source.unwrap_or_default();
+    println!("[歌词搜索] 开始搜索 - 标题: {}, 艺术家: {}, 优先源: {}", title, artist, preferred_source);
 
-    let candidates = collect_lyrics_candidates(&title, &artist).await?;
+    let candidates = collect_lyrics_candidates(&title, &artist, &preferred_source).await?;
     if let Some(first) = candidates.into_iter().next() {
         println!("[歌词搜索] 成功获取歌词，来源: {}", first.source);
         Ok(Some(first.lyrics))
@@ -1060,7 +1375,6 @@ fn find_upwards(start: &Path, relative: &str, max_depth: usize) -> Option<PathBu
     None
 }
 
-<<<<<<< HEAD
 fn resolve_music_server_exe_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     let mut exe_candidates: Vec<PathBuf> = Vec::new();
 
@@ -1079,9 +1393,6 @@ fn resolve_music_server_exe_path(app: &tauri::AppHandle) -> Option<PathBuf> {
 
     exe_candidates.into_iter().find(|path| path.exists())
 }
-=======
-
->>>>>>> feature/rust-music-server
 
 fn try_fallback_to_dist(app: &tauri::AppHandle) {
     if !cfg!(debug_assertions) {
@@ -1140,96 +1451,11 @@ fn try_fallback_to_dist(app: &tauri::AppHandle) {
     let _ = window.navigate(url);
 }
 
-<<<<<<< HEAD
-fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
-    if let Ok(mut guard) = music_server_child().lock() {
-        if let Some(child) = guard.as_mut() {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    *guard = None;
-                }
-                Ok(None) => {
-                    return Ok(true);
-                }
-                Err(error) => {
-                    return Err(format!("检查在线音乐服务进程状态失败: {}", error));
-                }
-            }
-        }
-    } else {
-        return Err("无法锁定在线音乐服务进程状态".to_string());
-    }
-
-    if is_music_server_running() {
-        println!("[music-server] 检测到本地在线音乐服务已在运行，复用现有服务");
-        return Ok(true);
-    }
-
-    let Some(exe_path) = resolve_music_server_exe_path(app) else {
-        return Err("未找到 music-server.exe，无法启动在线音乐服务".to_string());
-    };
-
-    let exe_display = exe_path.to_string_lossy().to_string();
-    let exe_parent = exe_path.parent().map(|p| p.to_path_buf());
-
-    let mut command = Command::new(&exe_display);
-    command.stdin(Stdio::null());
-    if cfg!(debug_assertions) {
-        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-    } else {
-        command.stdout(Stdio::null()).stderr(Stdio::null());
-    }
-    if let Some(parent) = &exe_parent {
-        command.current_dir(parent);
-    }
-    #[cfg(target_os = "windows")]
-    if !cfg!(debug_assertions) {
-        command.creation_flags(0x08000000);
-    }
-
-    let child = command
-        .spawn()
-        .map_err(|error| format!("启动在线音乐服务失败: {}", error))?;
-
-    if let Ok(mut guard) = music_server_child().lock() {
-        *guard = Some(child);
-    } else {
-        return Err("在线音乐服务已启动，但无法记录进程句柄".to_string());
-    }
-
-    println!("[music-server] 启动本地在线音乐服务独立进程: {}", exe_path.display());
-    for _ in 0..30 {
-        if is_music_server_running() {
-            return Ok(true);
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    if let Ok(mut guard) = music_server_child().lock() {
-        if let Some(mut child) = guard.take() {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    eprintln!("[music-server] 在线音乐服务进程已提前退出: {}", status);
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                Err(error) => {
-                    eprintln!("[music-server] 检查在线音乐服务进程状态失败: {}", error);
-                }
-            }
-        }
-    }
-
-    Err("在线音乐服务启动超时，请稍后重试".to_string())
-=======
 fn start_music_server_process(_app: &tauri::AppHandle) -> Result<bool, String> {
     tauri::async_runtime::spawn(async {
         music_server::start_server().await;
     });
     Ok(true)
->>>>>>> feature/rust-music-server
 }
 
 fn stop_music_server_process() -> Result<bool, String> {

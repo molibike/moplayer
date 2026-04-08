@@ -94,6 +94,23 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
   const contentScrollRef = useRef<HTMLDivElement>(null);
   const currentLineRef = useRef<HTMLParagraphElement>(null);
 
+  // 转换歌词源名称为中文
+  const getLyricsSourceLabel = (source?: string): string => {
+    if (!source) return '';
+    const sourceMap: Record<string, string> = {
+      'lrclib': 'LRCLIB',
+      'netease': '网易云音乐',
+      'tencent': 'QQ音乐',
+      'kugou': '酷狗音乐',
+      'kuwo': '酷我音乐',
+      'lrc_cx': 'LRC镜像',
+      'local': '本地歌词',
+      '内嵌歌词': '内嵌歌词',
+      '本地歌词': '本地歌词',
+    };
+    return sourceMap[source] || source;
+  };
+
   // 获取歌词行（带时间戳）
   const lyricsWithTime = useMemo(() => {
     return metadata?.lyricsLines && metadata.lyricsLines.length > 0
@@ -429,7 +446,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
                 </button>
                 {metadata?.lyricsSource ? (
                   <span className="text-gray-400" style={{ fontSize: 'clamp(0.8rem, 1.6vw, 0.9rem)' }}>
-                    来源：{metadata.lyricsSource}
+                    来源：{getLyricsSourceLabel(metadata.lyricsSource)}
                   </span>
                 ) : null}
               </div>
