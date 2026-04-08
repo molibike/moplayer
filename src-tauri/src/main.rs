@@ -9,14 +9,13 @@ use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::{command, Manager, State};
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+
+mod music_server;
+pub mod kuwo_crypto;
 
 static DIST_PREVIEW_SERVER: OnceLock<()> = OnceLock::new();
-static MUSIC_SERVER_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
 
 
@@ -929,13 +928,7 @@ fn is_port_open(addr: &str) -> bool {
     TcpStream::connect(addr).is_ok()
 }
 
-fn is_music_server_running() -> bool {
-    is_port_open("127.0.0.1:31999")
-}
 
-fn music_server_child() -> &'static Mutex<Option<Child>> {
-    MUSIC_SERVER_CHILD.get_or_init(|| Mutex::new(None))
-}
 
 fn is_vite_dev_server_running() -> bool {
     is_port_open("127.0.0.1:5173")
@@ -1067,6 +1060,7 @@ fn find_upwards(start: &Path, relative: &str, max_depth: usize) -> Option<PathBu
     None
 }
 
+<<<<<<< HEAD
 fn resolve_music_server_exe_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     let mut exe_candidates: Vec<PathBuf> = Vec::new();
 
@@ -1085,6 +1079,9 @@ fn resolve_music_server_exe_path(app: &tauri::AppHandle) -> Option<PathBuf> {
 
     exe_candidates.into_iter().find(|path| path.exists())
 }
+=======
+
+>>>>>>> feature/rust-music-server
 
 fn try_fallback_to_dist(app: &tauri::AppHandle) {
     if !cfg!(debug_assertions) {
@@ -1143,6 +1140,7 @@ fn try_fallback_to_dist(app: &tauri::AppHandle) {
     let _ = window.navigate(url);
 }
 
+<<<<<<< HEAD
 fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
     if let Ok(mut guard) = music_server_child().lock() {
         if let Some(child) = guard.as_mut() {
@@ -1225,32 +1223,17 @@ fn start_music_server_process(app: &tauri::AppHandle) -> Result<bool, String> {
     }
 
     Err("在线音乐服务启动超时，请稍后重试".to_string())
+=======
+fn start_music_server_process(_app: &tauri::AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn(async {
+        music_server::start_server().await;
+    });
+    Ok(true)
+>>>>>>> feature/rust-music-server
 }
 
 fn stop_music_server_process() -> Result<bool, String> {
-    let Ok(mut guard) = music_server_child().lock() else {
-        return Err("无法锁定在线音乐服务进程状态".to_string());
-    };
-
-    let Some(mut child) = guard.take() else {
-        return Ok(false);
-    };
-
-    match child.try_wait() {
-        Ok(Some(_)) => {
-            return Ok(false);
-        }
-        Ok(None) => {}
-        Err(error) => {
-            return Err(format!("检查在线音乐服务进程状态失败: {}", error));
-        }
-    }
-
-    child
-        .kill()
-        .map_err(|error| format!("停止在线音乐服务失败: {}", error))?;
-    let _ = child.wait();
-    println!("[music-server] 已停止本地在线音乐服务");
+    // Rust server runs in background, stopping not required for now
     Ok(true)
 }
 
