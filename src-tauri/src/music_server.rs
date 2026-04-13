@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
 };
 use reqwest::Client;
-use serde::Serialize;
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 use serde_json::json;
 use std::collections::HashMap;
 use url::Url;
@@ -15,39 +15,60 @@ use url::Url;
 
 
 const METING_API_BASE: &str = "https://meting-api-omega.vercel.app/api";
+const BUGUYY_API_BASE: &str = "https://a.buguyy.top/newapi";
 
 #[derive(Clone)]
 struct AppState {
     client: Client,
 }
 
-#[derive(Serialize)]
 struct TrackPayload {
     id: String,
     title: String,
     name: String,
     artist: String,
-    #[serde(rename = "artistList")]
     artist_list: Vec<String>,
     artists: Vec<String>,
     album: String,
-    #[serde(rename = "albumName")]
     album_name: String,
     cover: String,
     pic: String,
     image: String,
     source: String,
-    #[serde(rename = "sourceLabel")]
     source_label: String,
-    #[serde(rename = "durationMs")]
     duration_ms: Option<u64>,
     url: String,
-    #[serde(rename = "streamUrl")]
     stream_url: String,
-    #[serde(rename = "lyricUrl")]
     lyric_url: String,
-    #[serde(rename = "songId")]
     song_id: String,
+}
+
+impl Serialize for TrackPayload {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("TrackPayload", 16)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("title", &self.title)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("artist", &self.artist)?;
+        state.serialize_field("artistList", &self.artist_list)?;
+        state.serialize_field("artists", &self.artists)?;
+        state.serialize_field("album", &self.album)?;
+        state.serialize_field("albumName", &self.album_name)?;
+        state.serialize_field("cover", &self.cover)?;
+        state.serialize_field("pic", &self.pic)?;
+        state.serialize_field("image", &self.image)?;
+        state.serialize_field("source", &self.source)?;
+        state.serialize_field("sourceLabel", &self.source_label)?;
+        state.serialize_field("durationMs", &self.duration_ms)?;
+        state.serialize_field("url", &self.url)?;
+        state.serialize_field("streamUrl", &self.stream_url)?;
+        state.serialize_field("lyricUrl", &self.lyric_url)?;
+        state.serialize_field("songId", &self.song_id)?;
+        state.end()
+    }
 }
 
 fn get_source_label(source: &str) -> &str {
@@ -56,11 +77,176 @@ fn get_source_label(source: &str) -> &str {
         "tencent" | "qq" | "qqmusic" => "QQ音乐",
         "kugou" => "酷狗",
         "kuwo" => "酷我",
+        "buguyy" => "布谷音乐",
         "migu" => "咪咕",
         "bilibili" => "哔哩哔哩",
         "youtube" => "YouTube",
         _ => source,
     }
+}
+
+fn json_value_to_string(value: &serde_json::Value) -> String {
+    if let Some(text) = value.as_str() {
+        return text.trim().to_string();
+    }
+    if let Some(number) = value.as_u64() {
+        return number.to_string();
+    }
+    if let Some(number) = value.as_i64() {
+        return number.to_string();
+    }
+    if let Some(number) = value.as_f64() {
+        if number.fract() == 0.0 {
+            return (number as i64).to_string();
+        }
+        return number.to_string();
+    }
+    String::new()
+}
+
+fn parse_duration_ms(value: &serde_json::Value) -> Option<u64> {
+    if let Some(number) = value.as_u64() {
+        if number == 0 {
+            return None;
+        }
+        return Some(if number > 1000 { number } else { number * 1000 });
+    }
+
+    if let Some(number) = value.as_i64() {
+        if number <= 0 {
+            return None;
+        }
+        let number = number as u64;
+        return Some(if number > 1000 { number } else { number * 1000 });
+    }
+
+    let text = value.as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    if let Ok(number) = text.parse::<u64>() {
+        if number == 0 {
+            return None;
+        }
+        return Some(if number > 1000 { number } else { number * 1000 });
+    }
+
+    if text.contains(':') {
+        let mut total_seconds = 0u64;
+        for part in text.split(':') {
+            let number = part.trim().parse::<u64>().ok()?;
+            total_seconds = total_seconds.saturating_mul(60).saturating_add(number);
+        }
+        if total_seconds > 0 {
+            return Some(total_seconds * 1000);
+        }
+    }
+
+    None
+}
+
+fn normalize_lyrics_text(value: &str) -> String {
+    value
+        .replace("<br />", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br>", "\n")
+        .trim()
+        .to_string()
+}
+
+async fn search_buguyy(client: &Client, keyword: &str) -> Vec<TrackPayload> {
+    let mut tracks = Vec::new();
+    let req_url = format!(
+        "{}/search.php?keyword={}",
+        BUGUYY_API_BASE,
+        urlencoding::encode(keyword)
+    );
+
+    if let Ok(resp) = client.get(&req_url)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Origin", "https://buguyy.top")
+        .header("Referer", "https://buguyy.top/")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
+        .send().await
+    {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(list) = json.pointer("/data/list").and_then(|value| value.as_array()) {
+                for item in list {
+                    let id = json_value_to_string(&item["id"]);
+                    if id.is_empty() {
+                        continue;
+                    }
+
+                    let title = item["title"].as_str().unwrap_or_default().trim().to_string();
+                    let artist = item["singer"].as_str().unwrap_or_default().trim().to_string();
+                    let album = item["album"].as_str().unwrap_or_default().trim().to_string();
+                    let cover = item["picurl"].as_str().unwrap_or_default().trim().to_string();
+                    let duration_ms = parse_duration_ms(&item["duration"]);
+                    let source = "buguyy".to_string();
+                    let artist_list = if artist.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![artist.clone()]
+                    };
+
+                    tracks.push(TrackPayload {
+                        id: id.clone(),
+                        title: title.clone(),
+                        name: title.clone(),
+                        artist: artist.clone(),
+                        artist_list: artist_list.clone(),
+                        artists: artist_list,
+                        album: album.clone(),
+                        album_name: album,
+                        cover: cover.clone(),
+                        pic: cover.clone(),
+                        image: cover,
+                        source: source.clone(),
+                        source_label: get_source_label(&source).to_string(),
+                        duration_ms,
+                        url: format!("https://buguyy.top/#/song/{}", id),
+                        stream_url: format!("/api/music/stream?id={}&source={}", urlencoding::encode(&id), urlencoding::encode(&source)),
+                        lyric_url: format!("/api/music/lyric?id={}&source={}", urlencoding::encode(&id), urlencoding::encode(&source)),
+                        song_id: id,
+                    });
+                }
+            }
+        }
+    }
+
+    tracks
+}
+
+async fn get_buguyy_song_detail(client: &Client, id: &str) -> Option<serde_json::Value> {
+    let req_url = format!(
+        "{}/geturl2.php?id={}",
+        BUGUYY_API_BASE,
+        urlencoding::encode(id)
+    );
+
+    let resp = client.get(&req_url)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Origin", "https://buguyy.top")
+        .header("Referer", "https://buguyy.top/")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
+        .send().await
+        .ok()?;
+
+    let json = resp.json::<serde_json::Value>().await.ok()?;
+    let url = json.pointer("/data/url").and_then(|value| value.as_str()).unwrap_or_default().trim();
+    if url.is_empty() {
+        return None;
+    }
+    Some(json)
+}
+
+async fn get_buguyy_url(client: &Client, id: &str) -> Option<String> {
+    let json = get_buguyy_song_detail(client, id).await?;
+    json.pointer("/data/url")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 async fn search_tencent(client: &Client, keyword: &str) -> Vec<TrackPayload> {
@@ -223,7 +409,7 @@ async fn health() -> impl IntoResponse {
     Json(json!({
         "ok": true,
         "port": 31999,
-        "supportedSources": ["netease", "tencent", "kugou", "kuwo"],
+        "supportedSources": ["netease", "tencent", "kugou", "kuwo", "buguyy"],
         "endpoints": [
             "/api/music/health",
             "/api/music/search",
@@ -276,6 +462,9 @@ async fn search(
                 return source_tracks;
             } else if src == "kugou" {
                 source_tracks = search_kugou(&client, &keyword_clone).await;
+                return source_tracks;
+            } else if src == "buguyy" {
+                source_tracks = search_buguyy(&client, &keyword_clone).await;
                 return source_tracks;
             }
             
@@ -385,6 +574,17 @@ async fn lyric(
     let id = params.get("id").cloned().unwrap_or_default();
     let source = params.get("source").cloned().unwrap_or_else(|| "netease".to_string());
 
+    if source == "buguyy" {
+        let lyrics = get_buguyy_song_detail(&state.client, &id).await
+            .and_then(|json| json.pointer("/data/lrc").and_then(|value| value.as_str()).map(normalize_lyrics_text))
+            .unwrap_or_default();
+
+        return Json(json!({
+            "lyrics": lyrics,
+            "source": if id.is_empty() { "" } else { get_source_label(&source) }
+        })).into_response();
+    }
+
     let req_url = format!(
         "{}?server={}&type=lyric&id={}",
         METING_API_BASE,
@@ -394,16 +594,23 @@ async fn lyric(
 
     if let Ok(resp) = state.client.get(&req_url).send().await {
         if let Ok(text) = resp.text().await {
-            // Meting API returns JSON like {"lyric":"...", "tlyric":"..."} or plain text
+            let mut lyrics = text.clone();
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(lyric) = json["lyric"].as_str() {
-                    return lyric.to_string().into_response();
+                    lyrics = lyric.to_string();
                 }
             }
-            return text.into_response();
+            let lyrics = normalize_lyrics_text(&lyrics);
+            return Json(json!({
+                "lyrics": lyrics,
+                "source": if source.is_empty() { "" } else { "在线歌词" }
+            })).into_response();
         }
     }
-    String::new().into_response()
+    Json(json!({
+        "lyrics": "",
+        "source": ""
+    })).into_response()
 }
 
 async fn get_tencent_url(client: &Client, id: &str) -> Option<String> {
@@ -637,6 +844,10 @@ async fn stream_info(
         if let Some(url) = get_kugou_url(&state.client, &id).await {
             resolved_url = Some(url.clone());
         }
+    } else if source == "buguyy" {
+        if let Some(url) = get_buguyy_url(&state.client, &id).await {
+            resolved_url = Some(url.clone());
+        }
     }
 
     if resolved_url.is_none() {
@@ -704,6 +915,10 @@ async fn stream(
         }
     } else if source == "kugou" {
         if let Some(url) = get_kugou_url(&state.client, &id).await {
+            current_url = url;
+        }
+    } else if source == "buguyy" {
+        if let Some(url) = get_buguyy_url(&state.client, &id).await {
             current_url = url;
         }
     }
@@ -790,10 +1005,11 @@ pub async fn start_server() {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_kuwo_url() {
+    #[test]
+    fn test_kuwo_url() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
         let client = reqwest::Client::new();
-        let url = get_kuwo_url(&client, "261066002").await;
+        let url = runtime.block_on(get_kuwo_url(&client, "261066002"));
         println!("Test Kuwo URL: {:?}", url);
     }
 }

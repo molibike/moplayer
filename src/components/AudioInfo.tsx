@@ -103,6 +103,7 @@ const AudioInfo: React.FC<AudioInfoProps> = ({
       'tencent': 'QQ音乐',
       'kugou': '酷狗音乐',
       'kuwo': '酷我音乐',
+      'buguyy': '布谷音乐',
       'lrc_cx': 'LRC镜像',
       'local': '本地歌词',
       '内嵌歌词': '内嵌歌词',

@@ -103,6 +103,7 @@ interface PersistedPlaylistState {
 
 const PLAYLIST_STORAGE_KEY = 'moplayer:playlist:v1';
 const ONLINE_MUSIC_SOURCE_OPTIONS = [
+  { value: 'buguyy', label: '布谷音乐' },
   { value: 'netease', label: '网易云' },
   { value: 'tencent', label: 'QQ音乐' },
   { value: 'kugou', label: '酷狗' },

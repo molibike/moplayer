@@ -94,6 +94,7 @@ const OnlineMusicPanel: React.FC<OnlineMusicPanelProps> = ({
       if (sourceLabel === 'tencent' || sourceLabel === 'qq' || sourceLabel === 'qqmusic') return 'QQ音乐';
       if (sourceLabel === 'kugou') return '酷狗';
       if (sourceLabel === 'kuwo') return '酷我';
+      if (sourceLabel === 'buguyy') return '布谷音乐';
       if (sourceLabel === 'migu') return '咪咕';
       if (sourceLabel === 'bilibili') return '哔哩哔哩';
       return sourceLabel;
@@ -104,6 +105,7 @@ const OnlineMusicPanel: React.FC<OnlineMusicPanelProps> = ({
     if (source === 'tencent' || source === 'qq' || source === 'qqmusic') return 'QQ音乐';
     if (source === 'kugou') return '酷狗';
     if (source === 'kuwo') return '酷我';
+    if (source === 'buguyy') return '布谷音乐';
     if (source === 'migu') return '咪咕';
     if (source === 'bilibili') return '哔哩哔哩';
     return item.source || '未知来源';
@@ -139,6 +141,8 @@ const OnlineMusicPanel: React.FC<OnlineMusicPanelProps> = ({
             ? '酷狗'
             : status.resolvedSource === 'kuwo'
               ? '酷我'
+              : status.resolvedSource === 'buguyy'
+                ? '布谷音乐'
               : (status.resolvedSource || '其他来源');
       return {
         label: '切源可播',

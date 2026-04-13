@@ -58,6 +58,7 @@ fn normalize_search_text(input: &str) -> String {
         .collect()
 }
 
+#[allow(dead_code)]
 fn song_match_score(song: &serde_json::Value, title: &str, artist: &str) -> i32 {
     let normalized_title = normalize_search_text(title);
     let normalized_artist = normalize_search_text(artist);
@@ -353,6 +354,7 @@ fn is_valid_lyrics_text(text: &str) -> bool {
     !value.is_empty() && !value.contains("纯音乐")
 }
 
+#[allow(dead_code)]
 fn extract_search_result_songs<'a>(search_json: &'a serde_json::Value) -> Vec<&'a serde_json::Value> {
     if let Some(songs) = search_json.get("data").and_then(|v| v.as_array()) {
         return songs.iter().collect();
@@ -373,6 +375,7 @@ fn extract_search_result_songs<'a>(search_json: &'a serde_json::Value) -> Vec<&'
     Vec::new()
 }
 
+#[allow(dead_code)]
 fn extract_song_id(song: &serde_json::Value) -> Option<String> {
     song.get("id").and_then(|id| {
         id.as_i64()
@@ -381,6 +384,7 @@ fn extract_song_id(song: &serde_json::Value) -> Option<String> {
     })
 }
 
+#[allow(dead_code)]
 fn extract_song_name(song: &serde_json::Value) -> String {
     song.get("name")
         .or_else(|| song.get("title"))
@@ -389,6 +393,7 @@ fn extract_song_name(song: &serde_json::Value) -> String {
         .to_string()
 }
 
+#[allow(dead_code)]
 fn extract_song_artist(song: &serde_json::Value) -> String {
     if let Some(artist_name) = song.get("artist").and_then(|v| v.as_str()) {
         return artist_name.to_string();
@@ -541,6 +546,7 @@ async fn search_lyrics_from_lrclib(
     Ok(None)
 }
 
+#[allow(dead_code)]
 async fn search_lyrics_from_tencent(
     client: &reqwest::Client,
     title: &str,
@@ -1375,6 +1381,7 @@ fn find_upwards(start: &Path, relative: &str, max_depth: usize) -> Option<PathBu
     None
 }
 
+#[allow(dead_code)]
 fn resolve_music_server_exe_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     let mut exe_candidates: Vec<PathBuf> = Vec::new();
 
