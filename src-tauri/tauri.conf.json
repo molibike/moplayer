@@ -1,6 +1,6 @@
 {
   "productName": "MoPlayer",
-  "version": "0.57.0",
+  "version": "0.58.0",
   "identifier": "com.moplayer.desktop",
   "build": {
     "beforeBuildCommand": "npm run prebuild && npm run build && npm run build:music",
@@ -98,6 +98,16 @@
         ],
         "featureGroupRefs": [],
         "mergeRefs": []
+      },
+      "nsis": {
+        "installerHooks": "nsis-hooks.nsh",
+        "languages": [
+          "SimpChinese"
+        ],
+        "customLanguageFiles": {
+          "SimpChinese": "nsis-language-SimpChinese.nsh"
+        },
+        "displayLanguageSelector": false
       }
     },
     "fileAssociations": [
