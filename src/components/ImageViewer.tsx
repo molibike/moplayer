@@ -5,6 +5,124 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import * as exifr from 'exifr';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/build/pdf';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.js?url';
+import heic2any from 'heic2any';
+
+// ============== HEIC 解码缓存与请求去重 ==============
+// 缓存保存 Blob 而非 URL：URL 会被 revokeObjectURL 失效，Blob 不会
+// 每次命中缓存重新 createObjectURL（极廉价操作）
+// 使用 LRU 上限避免大图长时间使用后内存暴涨
+const HEIC_CACHE_MAX = 12;
+const heicDecodeCache = new Map<string, Promise<Blob>>();
+
+const touchCache = (key: string, promise: Promise<Blob>) => {
+  // 实现 LRU：先删后加，最新的排在最后
+  if (heicDecodeCache.has(key)) heicDecodeCache.delete(key);
+  heicDecodeCache.set(key, promise);
+  // 超过上限则删除最久未使用的
+  while (heicDecodeCache.size > HEIC_CACHE_MAX) {
+    const oldestKey = heicDecodeCache.keys().next().value;
+    if (oldestKey !== undefined) heicDecodeCache.delete(oldestKey);
+    else break;
+  }
+};
+
+const buildHeicCacheKey = (opts: { blob?: Blob; name?: string; path?: string }): string => {
+  if (opts.path) return `path:${opts.path.replace(/\\/g, '/')}`;
+  const anyBlob = opts.blob as any;
+  const lm = (anyBlob && typeof anyBlob.lastModified === 'number') ? anyBlob.lastModified : 0;
+  const size = opts.blob?.size ?? 0;
+  const name = opts.name ?? anyBlob?.name ?? '';
+  return `blob:${name}:${size}:${lm}`;
+};
+
+// 是否为 Tauri 环境（可调用 Rust 后端）
+const isTauriEnv = (): boolean => {
+  try {
+    return typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+  } catch {
+    return false;
+  }
+};
+
+// 使用 Rust 后端解码 HEIC（libheif 原生库，5-10 倍速）
+// 路径必须是绝对路径，否则回退 heic2any
+const decodeHeicViaRust = async (path: string): Promise<Blob> => {
+  const normalized = path.replace(/\\/g, '/');
+  // 调用后端命令，返回 JPEG 字节流
+  const bytes = await invoke<number[] | Uint8Array | ArrayBuffer>('decode_heic_to_jpeg', {
+    path: normalized,
+    quality: 82,
+  });
+  // 统一转成独立的 ArrayBuffer（避免 SharedArrayBuffer 类型不匹配 BlobPart）
+  let ab: ArrayBuffer;
+  if (bytes instanceof ArrayBuffer) {
+    ab = bytes;
+  } else if (bytes instanceof Uint8Array) {
+    // slice 生成新的 ArrayBuffer，确保类型为 ArrayBuffer 而非 ArrayBufferLike
+    ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  } else {
+    ab = new Uint8Array(bytes as number[]).buffer;
+  }
+  return new Blob([ab], { type: 'image/jpeg' });
+};
+
+// 使用 heic2any 解码 HEIC（前端 WASM，兼容性兜底）
+const decodeHeicViaJs = async (blob: Blob): Promise<Blob> => {
+  const converted = await heic2any({
+    blob,
+    toType: 'image/jpeg',
+    quality: 0.82,
+  });
+  return Array.isArray(converted) ? converted[0] : converted;
+};
+
+// 统一的 HEIC 解码入口：带缓存、请求去重，返回 Blob
+// 优先 Rust 后端（libheif，~500ms-1s）；失败回退 heic2any（WASM，~3-5s）
+const decodeHeicBlobWithCache = async (
+  blob: Blob,
+  cacheKey: string,
+  path?: string
+): Promise<Blob> => {
+  const cached = heicDecodeCache.get(cacheKey);
+  if (cached) {
+    console.log('[HEIC] 命中缓存:', cacheKey);
+    touchCache(cacheKey, cached);
+    return cached;
+  }
+
+  const task = (async () => {
+    const label = `[HEIC] 解码耗时 ${cacheKey}`;
+    console.time(label);
+    try {
+      // 优先 Rust 后端（需要绝对路径且在 Tauri 环境）
+      if (path && isTauriEnv()) {
+        try {
+          const jpeg = await decodeHeicViaRust(path);
+          console.timeEnd(label);
+          console.log('[HEIC] Rust 解码成功:', path);
+          return jpeg;
+        } catch (rustErr) {
+          console.warn('[HEIC] Rust 解码失败，回退 heic2any:', rustErr);
+        }
+      }
+      // 回退 heic2any
+      const jpegBlob = await decodeHeicViaJs(blob);
+      console.timeEnd(label);
+      console.log('[HEIC] heic2any 解码成功');
+      return jpegBlob;
+    } catch (err) {
+      console.timeEnd(label);
+      heicDecodeCache.delete(cacheKey);
+      throw err;
+    }
+  })();
+
+  touchCache(cacheKey, task);
+  return task;
+};
+
+// 判断路径是否为 HEIC/HEIF
+const isHeicPath = (p: string): boolean => /\.(heic|heif)$/i.test(p);
 
 interface ImageViewerProps {
   src: string;
@@ -91,6 +209,10 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   // 操作提示显示控制：鼠标在底部20%区域停留时显示
   const [hintVisible, setHintVisible] = useState(false);
   const hintTimerRef = useRef<number | null>(null);
+  // HEIC 解码中状态，用于显示 loading 提示
+  const [isHeicDecoding, setIsHeicDecoding] = useState(false);
+  // 跟踪最近一次触发解码的 key，避免旧结果覆盖新结果
+  const currentHeicKeyRef = useRef<string>('');
   // PDF 渲染状态
   const [isPdfFileMode, setIsPdfFileMode] = useState(false);
   const pdfDocRef = useRef<any>(null);
@@ -145,7 +267,12 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     // 若是 blob URL，优先依据 fileBlob 类型直接决定
     if (src && src.startsWith('blob:')) {
       const isPdfByBlob = fileBlob && typeof fileBlob.type === 'string' ? fileBlob.type === 'application/pdf' : false;
-      setActiveSrc(isPdfByBlob ? '' : (src || ''));
+
+      // 检查是否为 HEIC/HEIF 文件
+      const fileName = fileBlob?.name || '';
+      const blobType = (fileBlob as any)?.type;
+      const isHeic = /\.(heic|heif)$/i.test(fileName) || blobType === 'image/heic' || blobType === 'image/heif';
+
       // 记录尝试路径：优先父级 filePath，其次从 fileBlob 提取
       try {
         const candidatePath = (() => {
@@ -160,6 +287,44 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
           attemptingPathRef.current = candidatePath.replace(/\\/g, '/');
         }
       } catch {}
+
+      // PDF 文件不显示
+      if (isPdfByBlob) {
+        setActiveSrc('');
+        return;
+      }
+
+      // HEIC/HEIF 文件需要解码转换（带缓存，避免重复解码）
+      if (isHeic && fileBlob) {
+        const key = buildHeicCacheKey({ blob: fileBlob, name: fileName, path: attemptingPathRef.current || undefined });
+        currentHeicKeyRef.current = key;
+        // 命中缓存则不显示 loading（近乎瞬时）
+        if (!heicDecodeCache.has(key)) setIsHeicDecoding(true);
+        (async () => {
+          try {
+            const pathForRust = attemptingPathRef.current || (fileBlob as any)?.path || filePath || undefined;
+            const jpegBlob = await decodeHeicBlobWithCache(fileBlob, key, pathForRust);
+            // 每次创建新 URL，避免与其他地方 revoke 冲突
+            const url = URL.createObjectURL(jpegBlob);
+            if (currentHeicKeyRef.current === key) {
+              setActiveSrc(url);
+            }
+          } catch (heicErr) {
+            console.error('HEIC/HEIF blob 解码失败:', heicErr);
+            if (currentHeicKeyRef.current === key) {
+              setActiveSrc(src || '');
+            }
+          } finally {
+            if (currentHeicKeyRef.current === key) {
+              setIsHeicDecoding(false);
+            }
+          }
+        })();
+        return;
+      }
+
+      // 其他文件直接使用原始 blob URL
+      setActiveSrc(src || '');
       return;
     }
 
@@ -174,7 +339,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         attemptingPathRef.current = candidatePath.replace(/\\/g, '/');
       }
     } catch {}
-  }, [src]);
+  }, [src, fileBlob, filePath]);
 
   // 推断当前文件路径（用于 PDF 判断）
   const getInferredPath = useCallback(() => {
@@ -480,17 +645,33 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       try {
         const bytes = await readFile(normalized);
         const ext = normalized.split('.').pop()?.toLowerCase() || '';
-        const mimeMap: Record<string, string> = {
-          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon',
-          tif: 'image/tiff', tiff: 'image/tiff', heic: 'image/heic', heif: 'image/heif',
-          cr2: 'image/x-canon-cr2', nef: 'image/x-nikon-nef', arw: 'image/x-sony-arw', dng: 'image/x-adobe-dng', rw2: 'image/x-panasonic-rw2', orf: 'image/x-olympus-orf', raf: 'image/x-fuji-raf', sr2: 'image/x-sony-sr2',
-          exif: 'image/jpeg', raw: 'application/octet-stream', wmf: 'application/x-msmetafile', pdf: 'application/pdf'
-        };
-        const mime = mimeMap[ext] || 'application/octet-stream';
-        const blob = new Blob([bytes], { type: mime });
-        const u = URL.createObjectURL(blob);
-        console.log('生成 blob URL 作为回退:', u);
-        out.blob = u;
+
+        // HEIC/HEIF 文件需要解码转换（带缓存，避免重复解码）
+        if (ext === 'heic' || ext === 'heif') {
+          const heicBlob = new Blob([bytes], { type: 'image/heic' });
+          const key = buildHeicCacheKey({ path: normalized });
+          try {
+            const jpegBlob = await decodeHeicBlobWithCache(heicBlob, key, normalized);
+            // 每次创建新 URL，避免被 revoke 后失效
+            out.blob = URL.createObjectURL(jpegBlob);
+          } catch (heicErr) {
+            console.error('HEIC/HEIF 解码失败:', heicErr);
+            const fallbackBlob = new Blob([bytes], { type: 'image/heic' });
+            out.blob = URL.createObjectURL(fallbackBlob);
+          }
+        } else {
+          const mimeMap: Record<string, string> = {
+            jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon',
+            tif: 'image/tiff', tiff: 'image/tiff', heic: 'image/heic', heif: 'image/heif',
+            cr2: 'image/x-canon-cr2', nef: 'image/x-nikon-nef', arw: 'image/x-sony-arw', dng: 'image/x-adobe-dng', rw2: 'image/x-panasonic-rw2', orf: 'image/x-olympus-orf', raf: 'image/x-fuji-raf', sr2: 'image/x-sony-sr2',
+            exif: 'image/jpeg', raw: 'application/octet-stream', wmf: 'application/x-msmetafile', pdf: 'application/pdf'
+          };
+          const mime = mimeMap[ext] || 'application/octet-stream';
+          const blob = new Blob([bytes], { type: mime });
+          const u = URL.createObjectURL(blob);
+          console.log('生成 blob URL 作为回退:', u);
+          out.blob = u;
+        }
       } catch (e) {
         console.warn('FS 读取失败，无法生成 blob URL:', e);
       }
@@ -544,6 +725,43 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     const isPdf = detectPdf(inferred);
     const blobType = (fileBlob as any)?.type;
     if (isPdf || blobType === 'application/pdf') return;
+
+    // 检查是否为 HEIC/HEIF 文件
+    const fileName = fileBlob.name || '';
+    const isHeic = /\.(heic|heif)$/i.test(fileName) || blobType === 'image/heic' || blobType === 'image/heif';
+
+    if (isHeic) {
+      // HEIC 文件需要解码转换（带缓存，避免重复解码）
+      const key = buildHeicCacheKey({ blob: fileBlob, name: fileName, path: inferred || undefined });
+      currentHeicKeyRef.current = key;
+      if (!heicDecodeCache.has(key)) setIsHeicDecoding(true);
+      (async () => {
+        try {
+          const pathForRust = inferred || (fileBlob as any)?.path || undefined;
+          const jpegBlob = await decodeHeicBlobWithCache(fileBlob, key, pathForRust);
+          const url = URL.createObjectURL(jpegBlob);
+          if (currentHeicKeyRef.current === key) {
+            setActiveSrc(url);
+          }
+        } catch (heicErr) {
+          console.error('拖拽的 HEIC/HEIF 解码失败:', heicErr);
+          if (currentHeicKeyRef.current === key) {
+            try {
+              const u = URL.createObjectURL(fileBlob);
+              setActiveSrc(u);
+            } catch (e) {
+              console.warn('根据 fileBlob 生成 blob URL 失败:', e);
+            }
+          }
+        } finally {
+          if (currentHeicKeyRef.current === key) {
+            setIsHeicDecoding(false);
+          }
+        }
+      })();
+      return;
+    }
+
     try {
       const u = URL.createObjectURL(fileBlob);
       setActiveSrc(u);
@@ -946,16 +1164,31 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
             pdfImageUrlRef.current = null;
           }
 
+          // 如为 HEIC 文件，立即显示解码中提示，避免看起来卡死
+          const isHeicTarget = isHeicPath(newImagePath);
+          const targetKey = buildHeicCacheKey({ path: newImagePath });
+          if (isHeicTarget) {
+            currentHeicKeyRef.current = targetKey;
+            // 仅在未命中缓存时显示 loading（命中则瞬间完成）
+            if (!heicDecodeCache.has(targetKey)) {
+              setIsHeicDecoding(true);
+            }
+          }
+
           const candidates = await buildCandidateUrls(newImagePath, { includeBlob: true });
-          // 清理旧的 blob URL（由 activeSrc 统一管理）
+          // 清理旧的 blob URL（由 activeSrc 统一管理；缓存存的是 Blob，不受影响）
           if (activeSrc.startsWith('blob:')) {
             try { URL.revokeObjectURL(activeSrc); } catch {}
           }
 
           setImageInfo(null);
-      // 选择顺序调整为 blob 优先，其次 file，移除 asset 回退
-      const nextSrc = candidates.blob || candidates.file || '';
-      setActiveSrc(nextSrc);
+          // 选择顺序调整为 blob 优先，其次 file，移除 asset 回退
+          const nextSrc = candidates.blob || candidates.file || '';
+          // 若期间用户又切到别的图，丢弃过期结果
+          if (!isHeicTarget || currentHeicKeyRef.current === targetKey) {
+            setActiveSrc(nextSrc);
+          }
+          if (isHeicTarget) setIsHeicDecoding(false);
         }
 
         // 通知父组件图片已切换
@@ -967,33 +1200,40 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
           });
         }
 
-        // 预加载相邻图片以优化下一次切换速度（仅做 asset 级预加载，避免IO）
+        // 后台预解码相邻 HEIC 到缓存：下次切换瞬间命中
+        // 仅对 HEIC 做，普通图片浏览器原生加载足够快
         try {
           const preloadIndexNext = (newIndex + 1) % imageList.length;
           const preloadIndexPrev = (newIndex - 1 + imageList.length) % imageList.length;
           const preloadPaths = [imageList[preloadIndexNext], imageList[preloadIndexPrev]].filter(Boolean) as string[];
           for (const p of preloadPaths) {
-            // 跳过 PDF 的预加载，避免无效的 <img> 请求错误
-            if (p.toLowerCase().endsWith('.pdf')) continue;
-            // 关闭 asset.localhost 预加载，防止连接被拒绝影响主图加载
-            // const c = await buildCandidateUrls(p, { includeBlob: false });
-            // const u = c.asset || c.file;
-            // if (u) {
-            //   const img = new Image();
-            //   img.src = u;
-            // }
+            if (!isHeicPath(p)) continue;
+            const key = buildHeicCacheKey({ path: p });
+            if (heicDecodeCache.has(key)) continue; // 已缓存
+            // 不 await，后台异步执行，失败静默
+            (async () => {
+              try {
+                const bytes = await readFile(p);
+                const heicBlob = new Blob([bytes], { type: 'image/heic' });
+                await decodeHeicBlobWithCache(heicBlob, key, p);
+                console.log('[HEIC] 预解码完成:', p);
+              } catch (e) {
+                console.warn('[HEIC] 预解码失败，忽略:', p, e);
+              }
+            })();
           }
         } catch (preErr) {
           console.warn('预加载相邻图片失败，忽略:', preErr);
         }
       } catch (error) {
         console.error('切换图片失败:', error);
+        setIsHeicDecoding(false);
         if (onError) onError('切换图片失败');
       }
       // 释放切换保护标记
       switchingRef.current = false;
     }
-  }, [currentImageIndex, imageList, activeSrc, onStateChange]);
+  }, [currentImageIndex, imageList, activeSrc, onStateChange, onError]);
 
   // PDF 翻页：优先在 PDF 内翻页，边界时切换目录文件
   const switchPdfPage = useCallback(async (direction: 'prev' | 'next') => {
@@ -1574,6 +1814,19 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
           switchImage('next');
         }}
       />
+
+      {/* HEIC 解码中提示：解码耗时较长，给用户反馈 */}
+      {isHeicDecoding && (
+        <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+          <div className="bg-black/70 text-white px-4 py-2 rounded-lg flex items-center gap-2">
+            <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span className="text-sm">正在解码 HEIC 图片...</span>
+          </div>
+        </div>
+      )}
 
       {/* 操作提示：仅在鼠标停留底部20%区域时显示 */}
       {hintVisible && (

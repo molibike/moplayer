@@ -17,6 +17,72 @@ pub mod kuwo_crypto;
 
 static DIST_PREVIEW_SERVER: OnceLock<()> = OnceLock::new();
 
+// ============== HEIC/HEIF 解码命令 ==============
+// 使用 libheif-rs 原生解码 HEIC/HEIF，返回 JPEG 字节流
+// 相比前端的 heic2any（WASM）快 5-10 倍，且不阻塞 UI 线程
+#[command]
+async fn decode_heic_to_jpeg(path: String, quality: Option<u8>) -> Result<Vec<u8>, String> {
+    // 在 blocking 线程池中执行 CPU 密集型解码，避免阻塞 tokio 运行时
+    let q = quality.unwrap_or(82);
+    tokio::task::spawn_blocking(move || decode_heic_impl(&path, q))
+        .await
+        .map_err(|e| format!("解码任务 join 失败: {}", e))?
+}
+
+fn decode_heic_impl(path: &str, quality: u8) -> Result<Vec<u8>, String> {
+    use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
+    use image::{codecs::jpeg::JpegEncoder, ColorType};
+
+    let lib_heif = LibHeif::new();
+    let ctx = HeifContext::read_from_file(path)
+        .map_err(|e| format!("读取 HEIC 文件失败: {}", e))?;
+    let handle = ctx
+        .primary_image_handle()
+        .map_err(|e| format!("获取主图像句柄失败: {}", e))?;
+
+    // 解码为 RGB（无 Alpha，节省空间；若需透明度可改 RgbChroma::Rgba）
+    let image = lib_heif
+        .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgb), None)
+        .map_err(|e| format!("libheif 解码失败: {}", e))?;
+
+    let width = image.width();
+    let height = image.height();
+
+    let planes = image.planes();
+    let interleaved = planes
+        .interleaved
+        .ok_or_else(|| "解码结果缺少交错平面".to_string())?;
+
+    let data = interleaved.data;
+    let stride = interleaved.stride;
+
+    // libheif 返回的 stride 可能大于 width*3（行对齐 padding），需紧凑处理
+    let row_bytes = (width as usize) * 3;
+    let mut tight: Vec<u8> = Vec::with_capacity(row_bytes * (height as usize));
+    for row in 0..(height as usize) {
+        let start = row * stride;
+        let end = start + row_bytes;
+        if end > data.len() {
+            return Err(format!(
+                "像素数据越界: row={} end={} data.len()={}",
+                row,
+                end,
+                data.len()
+            ));
+        }
+        tight.extend_from_slice(&data[start..end]);
+    }
+
+    // 编码为 JPEG
+    let mut jpeg_bytes: Vec<u8> = Vec::with_capacity(row_bytes * (height as usize) / 4);
+    let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_bytes, quality);
+    encoder
+        .encode(&tight, width, height, ColorType::Rgb8.into())
+        .map_err(|e| format!("JPEG 编码失败: {}", e))?;
+
+    Ok(jpeg_bytes)
+}
+
 
 
 fn normalize_search_text(input: &str) -> String {
@@ -1503,7 +1569,8 @@ fn main() {
             load_local_lyrics,
             save_local_lyrics,
             start_music_server,
-            stop_music_server
+            stop_music_server,
+            decode_heic_to_jpeg
         ])
         .setup(|app| {
             try_fallback_to_dist(&app.handle());
