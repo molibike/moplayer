@@ -1,6 +1,6 @@
 [package]
 name = "moplayer"
-version = "0.59.0"
+version = "0.60.0"
 description = "高性能音视频播放器"
 authors = ["MoPlayer Team"]
 edition = "2021"
@@ -32,6 +32,11 @@ base64 = "0.22"
 libheif-rs = "2.1"
 # 用于把解码后的 RGB 缓冲编码为 JPEG 返回给前端
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# RAW 相机格式解码（纯 Rust）：支持 CR2/NEF/ARW/DNG/RW2/ORF/RAF 等主流格式
+# rawloader: 负责 RAW 文件解析与 Bayer 像素提取
+# imagepipe: 在 rawloader 之上做去马赛克 + 白平衡 + 色彩转换 + 伽马校正，输出可显示 sRGB
+rawloader = "0.37"
+imagepipe = "0.5"
 
 [features]
 default = ["custom-protocol"]

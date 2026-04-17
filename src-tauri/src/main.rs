@@ -29,6 +29,45 @@ async fn decode_heic_to_jpeg(path: String, quality: Option<u8>) -> Result<Vec<u8
         .map_err(|e| format!("解码任务 join 失败: {}", e))?
 }
 
+// ============== RAW 相机格式解码命令 ==============
+// 使用 rawloader + imagepipe 原生解码 RAW（CR2/NEF/ARW/DNG/RW2/ORF/RAF 等），返回 JPEG 字节流
+// 比仅展示嵌入缩略图（通常仅 320x240~1024x768）画质好几个数量级
+#[command]
+async fn decode_raw_to_jpeg(path: String, quality: Option<u8>) -> Result<Vec<u8>, String> {
+    let q = quality.unwrap_or(82);
+    tokio::task::spawn_blocking(move || decode_raw_impl(&path, q))
+        .await
+        .map_err(|e| format!("RAW 解码任务 join 失败: {}", e))?
+}
+
+fn decode_raw_impl(path: &str, quality: u8) -> Result<Vec<u8>, String> {
+    use imagepipe::Pipeline;
+    use image::{codecs::jpeg::JpegEncoder, ColorType};
+
+    // Pipeline::new_from_file 会完成：文件解析 → Bayer 提取 → 去马赛克 → 白平衡 → 色彩变换 → 伽马
+    // 参数：(path, max_size=0 表示全分辨率, linear=false 表示应用 sRGB 伽马)
+    let mut pipeline = Pipeline::new_from_file(path)
+        .map_err(|e| format!("RAW 文件解析失败: {}", e))?;
+
+    // 输出 8bit sRGB RGB 图像
+    let decoded = pipeline
+        .output_8bit(None)
+        .map_err(|e| format!("RAW 管线处理失败: {}", e))?;
+
+    let width = decoded.width as u32;
+    let height = decoded.height as u32;
+    let data = &decoded.data; // 紧凑 RGB，无 stride padding
+
+    // 编码为 JPEG
+    let mut jpeg_bytes: Vec<u8> = Vec::with_capacity((width as usize) * (height as usize) * 3 / 4);
+    let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_bytes, quality);
+    encoder
+        .encode(data, width, height, ColorType::Rgb8.into())
+        .map_err(|e| format!("RAW JPEG 编码失败: {}", e))?;
+
+    Ok(jpeg_bytes)
+}
+
 fn decode_heic_impl(path: &str, quality: u8) -> Result<Vec<u8>, String> {
     use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
     use image::{codecs::jpeg::JpegEncoder, ColorType};
@@ -1671,6 +1710,7 @@ fn main() {
             start_music_server,
             stop_music_server,
             decode_heic_to_jpeg,
+            decode_raw_to_jpeg,
             get_app_version,
             check_latest_version
         ])

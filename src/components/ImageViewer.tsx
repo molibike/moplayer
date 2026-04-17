@@ -124,6 +124,29 @@ const decodeHeicBlobWithCache = async (
 // 判断路径是否为 HEIC/HEIF
 const isHeicPath = (p: string): boolean => /\.(heic|heif)$/i.test(p);
 
+// 判断路径是否为主流 RAW 相机格式（rawloader/imagepipe 支持的）
+const isRawPath = (p: string): boolean =>
+  /\.(cr2|nef|arw|dng|rw2|orf|raf|sr2|srw|pef|3fr|erf|mef|mos|mrw|nrw|x3f)$/i.test(p);
+
+// 使用 Rust 后端解码 RAW（rawloader + imagepipe，纯 Rust 原生解码）
+// 返回 JPEG Blob；失败时抛出异常，由上层决定是否回退到缩略图
+const decodeRawViaRust = async (path: string): Promise<Blob> => {
+  const normalized = path.replace(/\\/g, '/');
+  const bytes = await invoke<number[] | Uint8Array | ArrayBuffer>('decode_raw_to_jpeg', {
+    path: normalized,
+    quality: 82,
+  });
+  let ab: ArrayBuffer;
+  if (bytes instanceof ArrayBuffer) {
+    ab = bytes;
+  } else if (bytes instanceof Uint8Array) {
+    ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  } else {
+    ab = new Uint8Array(bytes as number[]).buffer;
+  }
+  return new Blob([ab], { type: 'image/jpeg' });
+};
+
 interface ImageViewerProps {
   src: string;
   fileName?: string;
@@ -658,6 +681,19 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
             console.error('HEIC/HEIF 解码失败:', heicErr);
             const fallbackBlob = new Blob([bytes], { type: 'image/heic' });
             out.blob = URL.createObjectURL(fallbackBlob);
+          }
+        } else if (isRawPath(normalized) && isTauriEnv()) {
+          // RAW 相机格式：通过 Rust (rawloader + imagepipe) 原生解码
+          // 解码成功 → 全分辨率高清图；解码失败 → 不给 blob，交由 onError 回退到嵌入缩略图
+          try {
+            console.time(`[RAW] 解码耗时 ${normalized}`);
+            const jpegBlob = await decodeRawViaRust(normalized);
+            console.timeEnd(`[RAW] 解码耗时 ${normalized}`);
+            out.blob = URL.createObjectURL(jpegBlob);
+            console.log('[RAW] Rust 解码成功:', normalized);
+          } catch (rawErr) {
+            console.warn('[RAW] Rust 解码失败，将由上层回退到嵌入缩略图:', rawErr);
+            // 不写 out.blob；上层发现 blob 为空后，<img> 会走 file:// 候选 → 失败 → onError → 缩略图回退
           }
         } else {
           const mimeMap: Record<string, string> = {
@@ -1260,6 +1296,13 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const handleInitialImageError = useCallback(async () => {
     const img = imageRef.current;
     if (!img) return;
+    // HEIC 正在 Rust 解码中：此时 activeSrc 可能临时为空或仍指向前一张图的旧 URL，
+    // 浏览器的 <img> onError 会误触发本回退链。提前 return，等待 Rust 解码结果，
+    // 避免在高清图解码完成前就抢先显示低清嵌入缩略图（就是之前"优先打开缩略图"的根因）。
+    if (isHeicDecoding) {
+      console.log('HEIC 解码进行中，忽略本次 <img> onError，等待 Rust 解码完成');
+      return;
+    }
     // PDF 模式：禁止图片回退逻辑，等待专用渲染流程
     // 触发错误后，释放切换保护标记，避免后续按键被锁定
     switchingRef.current = false;
@@ -1353,6 +1396,13 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
         return;
       }
 
+      // 回退顺序说明：
+      //   1) blob（包含 Rust libheif 解码结果或普通图片 Blob）→ 已在上方尝试
+      //   2) file://（浏览器原生协议）→ 已在上方尝试
+      //   3) 嵌入 JPEG 缩略图（exifr 或手动扫描）→ 下方尝试
+      // 对 HEIC：Rust 解码成功时根本不会走到这里；只有 Rust 失败（如畸形文件、非 HEVC 编码的 HEIC 变种）
+      //         才会走到缩略图回退，此时低清缩略图总比报错更能让用户看到图片内容。
+      // 对 RAW（CR2/NEF/ARW 等）：浏览器和当前后端都无法解码，嵌入缩略图是唯一可展示途径。
       // 优先使用 exifr 提取嵌入的缩略图；失败时再手动扫描 JPEG
       try {
         const bytes = await readFile(inferredPath);
@@ -1424,7 +1474,7 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       console.error('初始加载回退处理失败:', msg);
       // 同上：不自动跳下一张，避免循环
     }
-  }, [buildCandidateUrls, currentFilePath, filePath, activeSrc, imageList, currentImageIndex, switchImage, fileBlob, detectPdf, src, pdfCurrentPage, renderPdfPage, isPdfFileMode]);
+  }, [buildCandidateUrls, currentFilePath, filePath, activeSrc, imageList, currentImageIndex, switchImage, fileBlob, detectPdf, src, pdfCurrentPage, renderPdfPage, isPdfFileMode, isHeicDecoding, onError]);
 
   // 缩放图片 - 以图片中心为基准点，确保图片中心相对于屏幕的绝对坐标不变
   const zoomImage = useCallback((zoomFactor: number) => {
