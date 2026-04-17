@@ -1,12 +1,13 @@
 {
   "name": "moplayer-frontend",
-  "version": "0.1.0",
+  "version": "0.57.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "dev:all": "vite",
     "dev:music": "node scripts/local-music-server.mjs",
     "dev:tauri": "vite",
+    "prebuild": "node scripts/bump-version.mjs",
     "build": "vite build",
     "build:music": "npx esbuild scripts/local-music-server.mjs --bundle --platform=node --format=cjs --outfile=dist/music-server.cjs && npx pkg dist/music-server.cjs -t node18-win-x64 -o src-tauri/music-server.exe",
     "preview": "vite preview",

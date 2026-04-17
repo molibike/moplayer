@@ -9,6 +9,7 @@ import MenuBar from './components/MenuBar';
 import ControlBar from './components/ControlBar';
 import IntegratedPlayer from './components/IntegratedPlayer';
 import FileDropZone from './components/FileDropZone';
+import VersionUpdateDialog from './components/VersionUpdateDialog';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 interface PlayerState {
@@ -160,6 +161,10 @@ function App() {
   const [onlineMusicServiceMessage, setOnlineMusicServiceMessage] = useState('在线服务已关闭');
   const [storedOnlinePlaylistItems, setStoredOnlinePlaylistItems] = useState<PersistedPlaylistItem[]>([]);
   const [startupFilePath, setStartupFilePath] = useState<string | null | undefined>(undefined);
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
+  const [currentVersion, setCurrentVersion] = useState('');
+  const [latestVersion, setLatestVersion] = useState('');
+  const [downloadUrl, setDownloadUrl] = useState('');
   const onlineMusicServiceBaseUrl = 'http://127.0.0.1:31999';
   const onlineLyricsCacheRef = useRef<Record<string, { lyrics: string; lyricsSource?: string }>>({});
   const playlistRestoreStartedRef = useRef(false);
@@ -169,6 +174,84 @@ function App() {
   const onlineMusicServiceStatusRef = useRef(onlineMusicServiceStatus);
   const onlineMusicPrecheckBatchRef = useRef(0);
   const onlineMusicPrecheckCacheRef = useRef<Record<string, OnlineMusicPrecheckCacheEntry>>({});
+
+  // 版本号比较函数
+  const compareVersions = (v1: string, v2: string): number => {
+    const parts1 = v1.split('.').map(Number);
+    const parts2 = v2.split('.').map(Number);
+    
+    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+      const num1 = parts1[i] || 0;
+      const num2 = parts2[i] || 0;
+      
+      if (num1 > num2) return 1;
+      if (num1 < num2) return -1;
+    }
+    
+    return 0;
+  };
+
+  // 检测当前系统平台
+  const getPlatform = (): 'windows' | 'macos' | 'linux' => {
+    const platform = navigator.platform.toLowerCase();
+    if (platform.includes('win')) return 'windows';
+    if (platform.includes('mac')) return 'macos';
+    return 'linux';
+  };
+
+  // 应用启动时检测新版本
+  useEffect(() => {
+    const checkForUpdates = async () => {
+      try {
+        // 获取当前版本
+        const currentVer = await invoke<string>('get_app_version');
+        setCurrentVersion(currentVer);
+        
+        // 检查最新版本
+        const releaseInfo = await invoke<{
+          version: string;
+          windows_url: string;
+          macos_url: string;
+          linux_url: string;
+          release_notes: string;
+        }>('check_latest_version');
+        
+        setLatestVersion(releaseInfo.version);
+        
+        // 根据当前系统平台选择下载链接
+        const platform = getPlatform();
+        let url = '';
+        switch (platform) {
+          case 'windows':
+            url = releaseInfo.windows_url;
+            break;
+          case 'macos':
+            url = releaseInfo.macos_url;
+            break;
+          case 'linux':
+            url = releaseInfo.linux_url;
+            break;
+        }
+        setDownloadUrl(url);
+        
+        // 比较版本号
+        if (compareVersions(releaseInfo.version, currentVer) > 0) {
+          // 有新版本，显示升级对话框
+          setShowUpdateDialog(true);
+        }
+      } catch (error) {
+        console.error('版本检测失败:', error);
+        // 版本检测失败不影响应用正常使用
+      }
+    };
+
+    // 延迟 3 秒后检测版本，避免影响应用启动速度
+    const timer = setTimeout(() => {
+      checkForUpdates();
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, []);
 
   // 播放器方法引用
   const playPauseRef = useRef<(() => void) | null>(null);
@@ -2076,6 +2159,16 @@ function App() {
               </button>
             </div>
           </div>
+        )}
+
+        {/* 版本升级提示对话框 */}
+        {showUpdateDialog && (
+          <VersionUpdateDialog
+            currentVersion={currentVersion}
+            latestVersion={latestVersion}
+            downloadUrl={downloadUrl}
+            onClose={() => setShowUpdateDialog(false)}
+          />
         )}
       </div>
     </div>

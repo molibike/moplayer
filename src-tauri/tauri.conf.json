@@ -1,9 +1,9 @@
 {
   "productName": "MoPlayer",
-  "version": "0.1.0",
+  "version": "0.57.0",
   "identifier": "com.moplayer.desktop",
   "build": {
-    "beforeBuildCommand": "npm run build && npm run build:music",
+    "beforeBuildCommand": "npm run prebuild && npm run build && npm run build:music",
     "beforeDevCommand": "npm run dev",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173"
@@ -30,7 +30,9 @@
         {
           "identifier": "main-capability",
           "description": "Capability for the main window",
-          "windows": ["main"],
+          "windows": [
+            "main"
+          ],
           "permissions": [
             "core:window:default",
             "core:window:allow-close",
@@ -50,7 +52,13 @@
             "fs:allow-read-file",
             "fs:allow-read-dir",
             "fs:allow-exists",
-            { "identifier": "fs:scope", "allow": ["**"], "deny": [] },
+            {
+              "identifier": "fs:scope",
+              "allow": [
+                "**"
+              ],
+              "deny": []
+            },
             "dialog:allow-message",
             "dialog:allow-open"
           ]
@@ -94,87 +102,121 @@
     },
     "fileAssociations": [
       {
-        "ext": ["mp4"],
+        "ext": [
+          "mp4"
+        ],
         "description": "MP4 视频文件",
         "mimeType": "video/mp4"
       },
       {
-        "ext": ["avi"],
+        "ext": [
+          "avi"
+        ],
         "description": "AVI 视频文件",
         "mimeType": "video/avi"
       },
       {
-        "ext": ["mkv"],
+        "ext": [
+          "mkv"
+        ],
         "description": "MKV 视频文件",
         "mimeType": "video/x-matroska"
       },
       {
-        "ext": ["mov"],
+        "ext": [
+          "mov"
+        ],
         "description": "MOV 视频文件",
         "mimeType": "video/quicktime"
       },
       {
-        "ext": ["wmv"],
+        "ext": [
+          "wmv"
+        ],
         "description": "WMV 视频文件",
         "mimeType": "video/x-ms-wmv"
       },
       {
-        "ext": ["flv"],
+        "ext": [
+          "flv"
+        ],
         "description": "FLV 视频文件",
         "mimeType": "video/x-flv"
       },
       {
-        "ext": ["webm"],
+        "ext": [
+          "webm"
+        ],
         "description": "WebM 视频文件",
         "mimeType": "video/webm"
       },
       {
-        "ext": ["m4v"],
+        "ext": [
+          "m4v"
+        ],
         "description": "M4V 视频文件",
         "mimeType": "video/x-m4v"
       },
       {
-        "ext": ["3gp"],
+        "ext": [
+          "3gp"
+        ],
         "description": "3GP 视频文件",
         "mimeType": "video/3gpp"
       },
       {
-        "ext": ["mp3"],
+        "ext": [
+          "mp3"
+        ],
         "description": "MP3 音频文件",
         "mimeType": "audio/mpeg"
       },
       {
-        "ext": ["wav"],
+        "ext": [
+          "wav"
+        ],
         "description": "WAV 音频文件",
         "mimeType": "audio/wav"
       },
       {
-        "ext": ["flac"],
+        "ext": [
+          "flac"
+        ],
         "description": "FLAC 音频文件",
         "mimeType": "audio/flac"
       },
       {
-        "ext": ["aac"],
+        "ext": [
+          "aac"
+        ],
         "description": "AAC 音频文件",
         "mimeType": "audio/aac"
       },
       {
-        "ext": ["ogg"],
+        "ext": [
+          "ogg"
+        ],
         "description": "OGG 音频文件",
         "mimeType": "audio/ogg"
       },
       {
-        "ext": ["wma"],
+        "ext": [
+          "wma"
+        ],
         "description": "WMA 音频文件",
         "mimeType": "audio/x-ms-wma"
       },
       {
-        "ext": ["m4a"],
+        "ext": [
+          "m4a"
+        ],
         "description": "M4A 音频文件",
         "mimeType": "audio/mp4"
       },
       {
-        "ext": ["pdf"],
+        "ext": [
+          "pdf"
+        ],
         "description": "PDF 文档",
         "mimeType": "application/pdf"
       }

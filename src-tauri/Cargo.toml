@@ -1,6 +1,6 @@
 [package]
 name = "moplayer"
-version = "0.1.0"
+version = "0.57.0"
 description = "高性能音视频播放器"
 authors = ["MoPlayer Team"]
 edition = "2021"
