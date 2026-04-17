@@ -3,7 +3,7 @@
   "version": "0.60.0",
   "identifier": "com.moplayer.desktop",
   "build": {
-    "beforeBuildCommand": "npm run prebuild && npm run build && npm run build:music",
+    "beforeBuildCommand": "npm run prebuild && npm run build",
     "beforeDevCommand": "npm run dev",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173"
