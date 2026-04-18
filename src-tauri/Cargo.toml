@@ -1,6 +1,6 @@
 [package]
 name = "moplayer"
-version = "0.60.0"
+version = "0.61.0"
 description = "高性能音视频播放器"
 authors = ["MoPlayer Team"]
 edition = "2021"
@@ -28,8 +28,9 @@ bytes = "1.11.1"
 regex = "1.11.1"
 rand = "0.8.5"
 base64 = "0.22"
-# HEIC/HEIF 硬件加速解码：纯 Rust 实现，支持 SIMD 加速，比 heic2any 快 5-10 倍
-heic = "0.1"
+# HEIC/HEIF 硬件加速解码：libheif-rs 绑定成熟稳定的原生 libheif C 库
+# （纯 Rust 的 heic 0.1.x 对 grid 图像解码有缺陷，会出现色块，暂不可用）
+libheif-rs = "2.1"
 # 用于把解码后的 RGB 缓冲编码为 JPEG 返回给前端
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # RAW 相机格式解码（纯 Rust）：支持 CR2/NEF/ARW/DNG/RW2/ORF/RAF 等主流格式
