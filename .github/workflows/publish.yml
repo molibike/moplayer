@@ -71,25 +71,26 @@ jobs:
         run: |
           brew install libheif pkg-config
 
-      # Windows: 使用 runner 预装的 vcpkg 安装 libheif，并通过 GitHub Actions 缓存二进制包避免每次重新编译
+      # Windows: 使用 runner 预装的 vcpkg 安装 libheif（静态链接），并通过 GitHub Actions 缓存二进制包加速
+      # 使用 x64-windows-static-md triplet：libheif 及其依赖（libde265、libaom 等）全部静态链接进 exe，
+      # 但 C/C++ 运行时仍使用动态 CRT（与 Tauri/WebView2 兼容），最终用户无需任何额外 DLL
       - name: setup vcpkg cache (windows only)
         if: matrix.platform == 'windows-latest'
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-libheif-${{ runner.os }}-v1
+          key: vcpkg-libheif-static-${{ runner.os }}-v2
 
       - name: install dependencies (windows only)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           # windows-latest runner 预装了 vcpkg 在 C:\vcpkg
-          C:\vcpkg\vcpkg.exe install libheif:x64-windows
-          # 将 libheif 所在目录写入环境变量，供 libheif-sys 通过 vcpkg 查找
+          # 使用 x64-windows-static-md：静态链接 libheif + 依赖，动态 CRT
+          C:\vcpkg\vcpkg.exe install libheif:x64-windows-static-md
+          # 告诉 libheif-sys 的 vcpkg crate 使用 static-md triplet 查找库
           echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-          echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
-          # 把 libheif DLL 目录加入 PATH，运行时链接需要
-          echo "C:\vcpkg\installed\x64-windows\bin" >> $env:GITHUB_PATH
+          echo "VCPKGRS_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
 
       - name: install frontend dependencies
         run: npm install
