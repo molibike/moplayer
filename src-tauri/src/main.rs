@@ -1560,20 +1560,10 @@ fn stop_music_server() -> Result<bool, String> {
 }
 
 #[command]
-fn get_app_version() -> Result<String, String> {
-    // 从 tauri.conf.json 读取版本号
-    let tauri_conf_path = PathBuf::from("src-tauri/tauri.conf.json");
-    let content = fs::read_to_string(&tauri_conf_path)
-        .map_err(|e| format!("读取 tauri.conf.json 失败: {}", e))?;
-    
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("解析 tauri.conf.json 失败: {}", e))?;
-    
-    let version = json.get("version")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "未找到版本号".to_string())?;
-    
-    Ok(version.to_string())
+fn get_app_version(app: tauri::AppHandle) -> Result<String, String> {
+    // 直接从 Tauri 的 package_info 读取版本号
+    // 该值编译时由 tauri.conf.json 注入，安装后无需依赖源码路径
+    Ok(app.package_info().version.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

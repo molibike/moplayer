@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { message } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 
 interface MenuBarProps {
   onOpenFile: () => void;
@@ -85,16 +86,23 @@ const MenuBar: React.FC<MenuBarProps> = ({
           key: 'about',
           action: async () => {
             console.log('关于菜单项被点击');
+            // 运行时动态获取真实版本号，避免写死
+            let versionText = '';
             try {
-              const aboutMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
+              versionText = await invoke<string>('get_app_version');
+            } catch (err) {
+              console.error('获取应用版本号失败:', err);
+              versionText = '未知';
+            }
+            const aboutMessage = `MoPlayer是一个多功能音视频播放器\n\n版本：${versionText}\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持`;
+            try {
               console.log('尝试显示关于对话框');
               await message(aboutMessage, { kind: 'info' });
               console.log('关于对话框显示成功');
             } catch (error) {
               console.error('显示关于对话框失败:', error);
-              const alertMessage = 'MoPlayer是一个多功能音视频播放器\n\n版本：0.1.0\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持';
               console.log('使用浏览器alert显示关于信息');
-              alert(alertMessage);
+              alert(aboutMessage);
             }
           } 
         },
