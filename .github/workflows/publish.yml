@@ -53,7 +53,18 @@ jobs:
         if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libheif-dev
+          # Tauri 2 在 Ubuntu 24.04 的官方依赖：
+          # - libayatana-appindicator3-dev 替代已被弃用的 libappindicator3-dev
+          # - libxdo-dev 为 Tauri 2 新增依赖（用于全局快捷键等）
+          # - libheif-dev 供 libheif-rs 绑定（24.04 版本已满足 >= 1.17）
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            libheif-dev
 
       - name: install dependencies (macos only)
         if: matrix.platform == 'macos-latest' || matrix.platform == 'macos-13'
