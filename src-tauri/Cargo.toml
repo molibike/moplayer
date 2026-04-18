@@ -1,6 +1,6 @@
 [package]
 name = "moplayer"
-version = "0.63.0"
+version = "0.64.0"
 description = "高性能音视频播放器"
 authors = ["MoPlayer Team"]
 edition = "2021"
@@ -29,8 +29,9 @@ regex = "1.11.1"
 rand = "0.8.5"
 base64 = "0.22"
 # HEIC/HEIF 硬件加速解码：libheif-rs 绑定成熟稳定的原生 libheif C 库
-# （纯 Rust 的 heic 0.1.x 对 grid 图像解码有缺陷，会出现色块，暂不可用）
-libheif-rs = "2.1"
+# 注意：默认 feature 是 v1_21（要求 libheif >= 1.21），但 Ubuntu 24.04 apt 只有 1.17、vcpkg 只有 ~1.19，
+# 所以必须 default-features = false 并只启用 v1_17，否则所有平台都会编译失败
+libheif-rs = { version = "2", default-features = false, features = ["v1_17"] }
 # 用于把解码后的 RGB 缓冲编码为 JPEG 返回给前端
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # RAW 相机格式解码（纯 Rust）：支持 CR2/NEF/ARW/DNG/RW2/ORF/RAF 等主流格式
