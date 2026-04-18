@@ -1603,65 +1603,81 @@ pub struct ReleaseInfo {
 
 #[command]
 async fn check_latest_version() -> Result<ReleaseInfo, String> {
-    // 从 GitHub Releases API 获取最新版本
-    // 使用 molibike/moplayer 仓库
+    // 从 GitHub Releases 列表 API 获取最新版本
+    // 注意：不使用 /releases/latest（它会过滤掉 draft 和 prerelease），
+    // 而是遍历 /releases，跳过 draft 后取最新一个。这样可以兼容 tauri-action 默认的 releaseDraft: true
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-    
-    let url = "https://api.github.com/repos/molibike/moplayer/releases/latest";
+
+    let url = "https://api.github.com/repos/molibike/moplayer/releases?per_page=20";
     let response = client
         .get(url)
         .header("User-Agent", "MoPlayer")
+        .header("Accept", "application/vnd.github+json")
         .send()
         .await
         .map_err(|e| format!("请求 GitHub API 失败: {}", e))?;
-    
+
     let status = response.status();
     if !status.is_success() {
         return Err(format!("GitHub API 返回错误状态: {}", status));
     }
-    
-    let json: serde_json::Value = response
+
+    let releases: Vec<serde_json::Value> = response
         .json()
         .await
         .map_err(|e| format!("解析 GitHub API 响应失败: {}", e))?;
-    
-    let tag_name = json.get("tag_name")
+
+    // 过滤掉 draft（未公开发布的草稿），保留正式发布和预发布版本
+    // GitHub 返回的列表默认按 created_at 降序，所以首个非 draft 即最新版本
+    let release = releases
+        .iter()
+        .find(|r| !r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false))
+        .ok_or_else(|| "未找到已发布的版本（仅存在草稿）".to_string())?;
+
+    let tag_name = release
+        .get("tag_name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "未找到 tag_name".to_string())?;
-    
-    // 移除 v 前缀（如果有的话）
-    let version = tag_name.strip_prefix('v').unwrap_or(tag_name).to_string();
-    
+
+    // 兼容两种 tag 格式：v1.2.3 和 moplayer-v1.2.3
+    let version = tag_name
+        .trim_start_matches("moplayer-")
+        .trim_start_matches('v')
+        .to_string();
+
     // 获取下载链接
-    let assets = json.get("assets")
+    let assets = release
+        .get("assets")
         .and_then(|v| v.as_array())
         .ok_or_else(|| "未找到 assets".to_string())?;
-    
+
     let mut windows_url = String::new();
     let mut macos_url = String::new();
     let mut linux_url = String::new();
-    
+
     for asset in assets {
         if let Some(name) = asset.get("name").and_then(|v| v.as_str()) {
-            let download_url = asset.get("browser_download_url")
+            let lower = name.to_lowercase();
+            let download_url = asset
+                .get("browser_download_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            
-            if name.contains(".exe") || name.contains(".msi") || name.contains("windows") {
+
+            if lower.ends_with(".exe") || lower.ends_with(".msi") || lower.contains("windows") {
                 windows_url = download_url.to_string();
-            } else if name.contains(".dmg") || name.contains("macos") || name.contains("darwin") {
+            } else if lower.ends_with(".dmg") || lower.contains("macos") || lower.contains("darwin") {
                 macos_url = download_url.to_string();
-            } else if name.contains(".AppImage") || name.contains(".deb") || name.contains("linux") {
+            } else if lower.ends_with(".appimage") || lower.ends_with(".deb") || lower.contains("linux") {
                 linux_url = download_url.to_string();
             }
         }
     }
     
     // 获取发布说明
-    let release_notes = json.get("body")
+    let release_notes = release.get("body")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();

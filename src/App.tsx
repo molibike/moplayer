@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -202,46 +203,71 @@ function App() {
   // 应用启动时检测新版本
   useEffect(() => {
     const checkForUpdates = async () => {
+      // 步骤 1：获取当前版本 —— 优先 Tauri 官方 getVersion（编译时由 tauri.conf.json 注入，最可靠）
+      let currentVer = '';
       try {
-        // 获取当前版本
-        const currentVer = await invoke<string>('get_app_version');
-        setCurrentVersion(currentVer);
-        
-        // 检查最新版本
-        const releaseInfo = await invoke<{
-          version: string;
-          windows_url: string;
-          macos_url: string;
-          linux_url: string;
-          release_notes: string;
-        }>('check_latest_version');
-        
-        setLatestVersion(releaseInfo.version);
-        
-        // 根据当前系统平台选择下载链接
-        const platform = getPlatform();
-        let url = '';
-        switch (platform) {
-          case 'windows':
-            url = releaseInfo.windows_url;
-            break;
-          case 'macos':
-            url = releaseInfo.macos_url;
-            break;
-          case 'linux':
-            url = releaseInfo.linux_url;
-            break;
+        currentVer = await getVersion();
+      } catch (err1) {
+        console.warn('[版本检测] getVersion 失败，回退自定义命令:', err1);
+        try {
+          currentVer = await invoke<string>('get_app_version');
+        } catch (err2) {
+          console.error('[版本检测] 获取当前版本失败，跳过升级检查:', err2);
+          return;
         }
-        setDownloadUrl(url);
-        
-        // 比较版本号
-        if (compareVersions(releaseInfo.version, currentVer) > 0) {
-          // 有新版本，显示升级对话框
-          setShowUpdateDialog(true);
-        }
+      }
+      if (!currentVer) {
+        console.error('[版本检测] 当前版本为空，跳过升级检查');
+        return;
+      }
+      setCurrentVersion(currentVer);
+      console.log('[版本检测] 当前版本:', currentVer);
+
+      // 步骤 2：拉取 GitHub Releases 中最新的非 draft 版本
+      let releaseInfo: {
+        version: string;
+        windows_url: string;
+        macos_url: string;
+        linux_url: string;
+        release_notes: string;
+      };
+      try {
+        releaseInfo = await invoke('check_latest_version');
       } catch (error) {
-        console.error('版本检测失败:', error);
-        // 版本检测失败不影响应用正常使用
+        console.error('[版本检测] 拉取最新版本失败:', error);
+        return;
+      }
+
+      if (!releaseInfo?.version) {
+        console.warn('[版本检测] 最新版本数据异常:', releaseInfo);
+        return;
+      }
+
+      setLatestVersion(releaseInfo.version);
+      console.log('[版本检测] 最新版本:', releaseInfo.version);
+
+      // 根据当前系统平台选择下载链接
+      const platform = getPlatform();
+      let url = '';
+      switch (platform) {
+        case 'windows':
+          url = releaseInfo.windows_url;
+          break;
+        case 'macos':
+          url = releaseInfo.macos_url;
+          break;
+        case 'linux':
+          url = releaseInfo.linux_url;
+          break;
+      }
+      setDownloadUrl(url);
+
+      // 比较版本号，>0 表示远端更新
+      if (compareVersions(releaseInfo.version, currentVer) > 0) {
+        console.log('[版本检测] 发现新版本，弹出升级对话框');
+        setShowUpdateDialog(true);
+      } else {
+        console.log('[版本检测] 当前已是最新版本');
       }
     };
 

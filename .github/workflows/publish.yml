@@ -16,11 +16,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS Apple Silicon（M 系列），runner 本身即 arm64，brew 装 arm64 的 libheif
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest'
+          # macOS Intel x86_64，用 macos-13 x86_64 runner，避免 arm64 runner 交叉编译 libheif 找不到 x86_64 链接库
+          - platform: 'macos-13'
             args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04'
+          # Ubuntu 24.04 自带 libheif 1.17+，满足 libheif-rs 2.x 的最低要求（22.04 只有 1.12 会失败）
+          - platform: 'ubuntu-24.04'
             args: ''
           - platform: 'windows-latest'
             args: ''
@@ -38,7 +41,8 @@ jobs:
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          # macos-latest runner 为 arm64，需 aarch64 target；macos-13 runner 为 x86_64，需 x86_64 target
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || matrix.platform == 'macos-13' && 'x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -46,13 +50,13 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libheif-dev
 
       - name: install dependencies (macos only)
-        if: matrix.platform == 'macos-latest'
+        if: matrix.platform == 'macos-latest' || matrix.platform == 'macos-13'
         run: |
           brew install libheif pkg-config
 

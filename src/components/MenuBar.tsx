@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getVersion } from '@tauri-apps/api/app';
 import { message } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -86,13 +87,19 @@ const MenuBar: React.FC<MenuBarProps> = ({
           key: 'about',
           action: async () => {
             console.log('关于菜单项被点击');
-            // 运行时动态获取真实版本号，避免写死
+            // 优先用 Tauri 官方 API 直接读取编译时注入的版本号（来自 tauri.conf.json）
+            // 失败再回退自定义命令，最终 fallback 到 "未知"
             let versionText = '';
             try {
-              versionText = await invoke<string>('get_app_version');
-            } catch (err) {
-              console.error('获取应用版本号失败:', err);
-              versionText = '未知';
+              versionText = await getVersion();
+            } catch (err1) {
+              console.error('getVersion 失败，尝试 invoke:', err1);
+              try {
+                versionText = await invoke<string>('get_app_version');
+              } catch (err2) {
+                console.error('获取应用版本号失败:', err2);
+                versionText = '未知';
+              }
             }
             const aboutMessage = `MoPlayer是一个多功能音视频播放器\n\n版本：${versionText}\n\n特性：\n• 支持多种音视频格式\n• 播放列表管理\n• 多种播放模式\n• 可视化音频界面\n• 键盘快捷键支持`;
             try {
