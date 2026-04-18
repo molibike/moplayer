@@ -29,7 +29,7 @@ regex = "1.11.1"
 rand = "0.8.5"
 base64 = "0.22"
 # HEIC/HEIF 硬件加速解码：纯 Rust 实现，支持 SIMD 加速，比 heic2any 快 5-10 倍
-heic = "0.7"
+heic = "0.1"
 # 用于把解码后的 RGB 缓冲编码为 JPEG 返回给前端
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # RAW 相机格式解码（纯 Rust）：支持 CR2/NEF/ARW/DNG/RW2/ORF/RAF 等主流格式
