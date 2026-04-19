@@ -1,6 +1,6 @@
 {
   "productName": "MoPlayer",
-  "version": "0.69.0",
+  "version": "0.70.0",
   "identifier": "com.moplayer.desktop",
   "build": {
     "beforeBuildCommand": "npm run prebuild && npm run build",
@@ -46,6 +46,7 @@
             "core:window:allow-center",
             "core:window:allow-show",
             "core:window:allow-hide",
+            "core:app:default",
             "core:event:default",
             "core:event:allow-listen",
             "fs:default",

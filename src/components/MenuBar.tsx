@@ -15,6 +15,7 @@ interface MenuBarProps {
   onlineMusicServiceStatus?: 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
   onlineMusicServiceMessage?: string;
   onToggleOnlineMusic?: () => void;
+  onCheckUpdate?: () => void;
 }
 
 interface MenuItem {
@@ -40,7 +41,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
   onlineMusicEnabled = false,
   onlineMusicServiceStatus = 'stopped',
   onlineMusicServiceMessage = '在线服务已关闭',
-  onToggleOnlineMusic
+  onToggleOnlineMusic,
+  onCheckUpdate
 }) => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(true);
@@ -79,6 +81,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
               console.log('使用浏览器alert显示支持格式');
               alert(alertMessage);
             }
+          }
+        },
+        { 
+          label: '检查更新',
+          key: 'check-update',
+          action: () => {
+            console.log('检查更新菜单项被点击');
+            onCheckUpdate?.();
           }
         },
         { separator: true },
