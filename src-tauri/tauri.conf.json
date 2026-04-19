@@ -1,6 +1,6 @@
 {
   "productName": "MoPlayer",
-  "version": "0.64.0",
+  "version": "0.69.0",
   "identifier": "com.moplayer.desktop",
   "build": {
     "beforeBuildCommand": "npm run prebuild && npm run build",

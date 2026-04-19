@@ -64,10 +64,16 @@ const ControlBar: React.FC<ControlBarProps> = ({
   const [volumeBeforeMute, setVolumeBeforeMute] = useState(100);
   const [isDraggingProgress, setIsDraggingProgress] = useState(false);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showPlaybackRateMenu, setShowPlaybackRateMenu] = useState(false);
 
   const playlistRef = useRef<HTMLDivElement>(null);
+  const playbackRateRef = useRef<HTMLDivElement>(null);
   const timeoutRef = useRef<NodeJS.Timeout>();
   const mouseMoveTimeoutRef = useRef<NodeJS.Timeout>();
+
+  // 倍速选项列表
+  const playbackRates = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
   const playModeLabels = {
     sequential: '顺序',
@@ -216,6 +222,23 @@ const ControlBar: React.FC<ControlBarProps> = ({
     };
   }, [showPlaylist]);
 
+  // 点击倍速菜单外部时关闭菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (playbackRateRef.current && !playbackRateRef.current.contains(event.target as Node)) {
+        setShowPlaybackRateMenu(false);
+      }
+    };
+
+    if (showPlaybackRateMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showPlaybackRateMenu]);
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -232,6 +255,16 @@ const ControlBar: React.FC<ControlBarProps> = ({
     const audioElement = document.querySelector('audio');
     if (videoElement) videoElement.volume = newVolume / 100;
     if (audioElement) audioElement.volume = newVolume / 100;
+  };
+
+  // 选择指定倍速
+  const handlePlaybackRateSelect = (rate: number) => {
+    setPlaybackRate(rate);
+    setShowPlaybackRateMenu(false);
+    const videoElement = document.querySelector('video');
+    const audioElement = document.querySelector('audio');
+    if (videoElement) videoElement.playbackRate = rate;
+    if (audioElement) audioElement.playbackRate = rate;
   };
 
   const handleMuteToggle = () => {
@@ -387,6 +420,35 @@ const ControlBar: React.FC<ControlBarProps> = ({
         </div>
 
         <div className="flex items-center" style={{ gap: 'clamp(4px, 1vw, 8px)' }}>
+          {/* 倍速按钮 - 仅视频模式显示 */}
+          {playlistViewMode === 'video' && (
+            <div className="relative flex items-center" ref={playbackRateRef}>
+              <button
+                onClick={() => setShowPlaybackRateMenu(prev => !prev)}
+                className="text-gray-300 hover:text-white transition-colors font-mono leading-none"
+                style={{ fontSize: 'clamp(0.625rem, 1.2vw, 0.75rem)', minWidth: 'clamp(28px, 4vw, 36px)', textAlign: 'center' }}
+                title={`播放倍速: ${playbackRate}x（点击选择）`}
+              >
+                {playbackRate === 1 ? '1.0x' : `${playbackRate}x`}
+              </button>
+              {showPlaybackRateMenu && (
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-gray-900 border border-gray-700/50 rounded-md shadow-xl py-1 z-50" style={{ minWidth: '60px' }}>
+                  {playbackRates.map(rate => (
+                    <div
+                      key={rate}
+                      onClick={() => handlePlaybackRateSelect(rate)}
+                      className={`px-3 py-1 text-center cursor-pointer transition-colors font-mono ${
+                        rate === playbackRate ? 'text-blue-400 bg-blue-600/20' : 'text-gray-300 hover:text-white hover:bg-white/10'
+                      }`}
+                      style={{ fontSize: 'clamp(0.625rem, 1.2vw, 0.75rem)' }}
+                    >
+                      {rate === 1 ? '1.0x' : `${rate}x`}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex items-center" style={{ gap: 'clamp(2px, 0.5vw, 4px)' }}>
             <div className="text-gray-300 cursor-pointer hover:text-white transition-colors" style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} onClick={handleMuteToggle} title={isMuted ? '取消静音' : '静音'}>
               <svg style={{ width: '100%', height: '100%' }} fill="currentColor" viewBox="0 0 20 20">
