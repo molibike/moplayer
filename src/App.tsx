@@ -239,6 +239,15 @@ function App() {
     try {
       releaseInfo = await invoke('check_latest_version');
     } catch (error) {
+      const errMsg = String(error);
+      // 没有已发布的正式版本（只有草稿）时，视为"当前已是最新版本"
+      if (errMsg.includes('仅存在草稿') || errMsg.includes('未找到已发布的版本')) {
+        console.log('[版本检测] 暂无已发布的正式版本');
+        if (manual) {
+          try { await message(`当前已是最新版本 (v${currentVer})`, { kind: 'info', title: '检查更新' }); } catch { alert(`当前已是最新版本 (v${currentVer})`); }
+        }
+        return;
+      }
       console.error('[版本检测] 拉取最新版本失败:', error);
       if (manual) {
         try { await message(`检查更新失败：${error}`, { kind: 'error', title: '检查更新' }); } catch { alert(`检查更新失败：${error}`); }
