@@ -324,7 +324,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
     return null;
   }
 
-  if (!isVisible && !showPlaylist) {
+  if (!isVisible && !showPlaylist && !showPlaybackRateMenu) {
     return null;
   }
 
@@ -339,6 +339,8 @@ const ControlBar: React.FC<ControlBarProps> = ({
       }}
       onMouseLeave={() => {
         if (!isPlaying) return;
+        // 倍速菜单打开时不隐藏控制栏，避免组件卸载导致菜单状态丢失
+        if (showPlaybackRateMenu) return;
         setIsVisible(false);
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         timeoutRef.current = setTimeout(() => {
@@ -432,11 +434,14 @@ const ControlBar: React.FC<ControlBarProps> = ({
                 {playbackRate === 1 ? '1.0x' : `${playbackRate}x`}
               </button>
               {showPlaybackRateMenu && (
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-gray-900 border border-gray-700/50 rounded-md shadow-xl py-1 z-50" style={{ minWidth: '60px' }}>
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-gray-900 border border-gray-700/50 rounded-md shadow-xl py-1 z-50" style={{ minWidth: '60px' }}>
                   {playbackRates.map(rate => (
                     <div
                       key={rate}
-                      onClick={() => handlePlaybackRateSelect(rate)}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        handlePlaybackRateSelect(rate);
+                      }}
                       className={`px-3 py-1 text-center cursor-pointer transition-colors font-mono ${
                         rate === playbackRate ? 'text-blue-400 bg-blue-600/20' : 'text-gray-300 hover:text-white hover:bg-white/10'
                       }`}
