@@ -141,6 +141,18 @@ const ControlBar: React.FC<ControlBarProps> = ({
     }
   });
 
+  // 当前播放项的URL，用于检测目录模式下同索引但不同文件的切换
+  const currentItemUrl = currentIndex >= 0 && currentIndex < playlist.length
+    ? playlist[currentIndex].url
+    : '';
+
+  // 切换播放项时，重置倍速为1x（新视频默认以正常速度播放）
+  // 同时依赖 currentItemUrl，确保目录模式下替换同索引项时也能触发重置
+  useEffect(() => {
+    setPlaybackRate(1);
+    setShowPlaybackRateMenu(false);
+  }, [currentIndex, currentItemUrl]);
+
   useEffect(() => {
     if (playlistViewMode === 'video') {
       setPlaylistTab('video');
@@ -330,8 +342,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
 
   return (
     <div
-      className="control-bar fixed bottom-0 left-0 right-0 bg-transparent z-40 transition-all duration-300"
-      style={{ height: '60px' }}
+      className="control-bar fixed bottom-0 left-0 right-0 bg-transparent z-40 transition-all duration-300 cb-wrap"
       onMouseEnter={() => {
         setIsVisible(true);
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -348,14 +359,15 @@ const ControlBar: React.FC<ControlBarProps> = ({
         }, 5000);
       }}
     >
-      <div className="flex items-center justify-between px-3 py-1" style={{ height: '30px', alignItems: 'center', justifyContent: 'center', background: 'transparent' }}>
-        <div className="flex items-center space-x-2 flex-1" style={{ alignItems: 'center', justifyContent: 'center' }}>
+      <div className="flex items-center justify-between px-3 py-1 cb-progress-row">
+        <div className="flex items-center space-x-2 flex-1 cb-progress-inner">
           <div className="text-xs text-gray-300 min-w-[35px] text-right">{formatTime(currentTime)}</div>
           <div className="flex-1 relative">
             <div className="w-full h-px bg-gray-500/30 absolute top-1/2 transform -translate-y-1/2"></div>
             <input
               type="range"
-              className="w-full h-1 appearance-none cursor-pointer bg-transparent relative z-10 progress-slider"
+              className="w-full h-1 appearance-none cursor-pointer bg-transparent relative z-10 progress-slider cb-progress-input"
+              title="进度控制"
               min="0"
               max={duration || 100}
               value={isDraggingProgress ? undefined : currentTime}
@@ -369,51 +381,46 @@ const ControlBar: React.FC<ControlBarProps> = ({
                 const newTime = parseFloat((event.target as HTMLInputElement).value);
                 if (onSeekTo) onSeekTo(newTime);
               }}
-              style={{
-                background: 'transparent',
-                outline: 'none',
-                '--progress': `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
-              } as React.CSSProperties}
+              style={{ '--progress': `${duration > 0 ? (currentTime / duration) * 100 : 0}%` } as React.CSSProperties}
             />
           </div>
           <div className="text-xs text-gray-300 min-w-[35px]">{formatTime(duration)}</div>
         </div>
       </div>
 
-      <div className="flex items-center justify-between px-3 py-1 border-t border-gray-700/30" style={{ alignItems: 'center', justifyContent: 'center', height: '30px', background: 'rgba(0, 0, 0, 0.7)' }}>
-        <div className="flex items-center" style={{ gap: 'clamp(2px, 0.5vw, 4px)' }}>
-          <button onClick={onPrevious} className="hover:bg-white/20 rounded transition-colors" style={{ padding: 'clamp(4px, 1vw, 8px)' }} title="上一曲">
-            <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
+      <div className="flex items-center justify-between px-3 py-1 border-t border-gray-700/30 cb-controls-row">
+        <div className="flex items-center cb-gap-sm">
+          <button onClick={onPrevious} className="hover:bg-white/20 rounded transition-colors cb-btn" title="上一曲">
+            <svg className="cb-icon" fill="currentColor" viewBox="0 0 20 20">
               <path d="M8.445 14.832A1 1 0 0010 14v-2.798l5.445 3.63A1 1 0 0017 14V6a1 1 0 00-1.555-.832L10 8.798V6a1 1 0 00-1.555-.832l-6 4a1 1 0 000 1.664l6 4z" />
             </svg>
           </button>
-          <button onClick={onPlayPause} className="hover:bg-white/20 rounded transition-colors" style={{ padding: 'clamp(4px, 1vw, 8px)' }} title={isPlaying ? '暂停' : '播放'}>
+          <button onClick={onPlayPause} className="hover:bg-white/20 rounded transition-colors cb-btn" title={isPlaying ? '暂停' : '播放'}>
             {isPlaying ? (
-              <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
+              <svg className="cb-icon" fill="currentColor" viewBox="0 0 20 20">
                 <path d="M5.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5zM12.75 3a.75.75 0 00-.75.75v12.5c0 .414.336.75.75.75h1.5a.75.75 0 00.75-.75V3.75a.75.75 0 00-.75-.75h-1.5z" />
               </svg>
             ) : (
-              <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
+              <svg className="cb-icon" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
               </svg>
             )}
           </button>
-          <button onClick={onStop} className="hover:bg-white/20 rounded transition-colors" style={{ padding: 'clamp(4px, 1vw, 8px)' }} title="停止">
-            <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
+          <button onClick={onStop} className="hover:bg-white/20 rounded transition-colors cb-btn" title="停止">
+            <svg className="cb-icon" fill="currentColor" viewBox="0 0 20 20">
               <path d="M5.25 3A2.25 2.25 0 003 5.25v9.5A2.25 2.25 0 005.25 17h9.5A2.25 2.25 0 0017 14.75v-9.5A2.25 2.25 0 0014.75 3h-9.5z" />
             </svg>
           </button>
-          <button onClick={onNext} className="hover:bg-white/20 rounded transition-colors" style={{ padding: 'clamp(4px, 1vw, 8px)' }} title="下一曲">
-            <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
+          <button onClick={onNext} className="hover:bg-white/20 rounded transition-colors cb-btn" title="下一曲">
+            <svg className="cb-icon" fill="currentColor" viewBox="0 0 20 20">
               <path d="M12.5 5.634a1 1 0 011.55-.832l6 4a1 1 0 010 1.664l-6 4A1 1 0 0112 14v-2.798l-5.445 3.63A1 1 0 015 14V6a1 1 0 011.555-.832L12 8.798V6a1 1 0 01.5-.866z" />
             </svg>
           </button>
         </div>
 
-        <div className="flex-1" style={{ margin: 'clamp(8px, 2vw, 16px)' }}>
+        <div className="flex-1 cb-filename-wrap">
           <div
-            className="text-gray-300 truncate text-center cursor-pointer hover:text-white transition-colors mx-auto"
-            style={{ fontSize: 'clamp(0.75rem, 1.5vw, 0.875rem)', maxWidth: 'clamp(150px, 30vw, 300px)' }}
+            className="text-gray-300 truncate text-center cursor-pointer hover:text-white transition-colors mx-auto cb-filename"
             onClick={() => openFilePicker(false, onFileSelectAndPlay)}
             title="点击选择文件"
           >
@@ -421,20 +428,19 @@ const ControlBar: React.FC<ControlBarProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center" style={{ gap: 'clamp(4px, 1vw, 8px)' }}>
+        <div className="flex items-center cb-gap-md">
           {/* 倍速按钮 - 仅视频模式显示 */}
           {playlistViewMode === 'video' && (
             <div className="relative flex items-center" ref={playbackRateRef}>
               <button
                 onClick={() => setShowPlaybackRateMenu(prev => !prev)}
-                className="text-gray-300 hover:text-white transition-colors font-mono leading-none"
-                style={{ fontSize: 'clamp(0.625rem, 1.2vw, 0.75rem)', minWidth: 'clamp(28px, 4vw, 36px)', textAlign: 'center' }}
+                className="text-gray-300 hover:text-white transition-colors font-mono leading-none cb-rate-btn"
                 title={`播放倍速: ${playbackRate}x（点击选择）`}
               >
                 {playbackRate === 1 ? '1.0x' : `${playbackRate}x`}
               </button>
               {showPlaybackRateMenu && (
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-gray-900 border border-gray-700/50 rounded-md shadow-xl py-1 z-50" style={{ minWidth: '60px' }}>
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-gray-900 border border-gray-700/50 rounded-md shadow-xl py-1 z-50 cb-rate-menu">
                   {playbackRates.map(rate => (
                     <div
                       key={rate}
@@ -444,8 +450,7 @@ const ControlBar: React.FC<ControlBarProps> = ({
                       }}
                       className={`px-3 py-1 text-center cursor-pointer transition-colors font-mono ${
                         rate === playbackRate ? 'text-blue-400 bg-blue-600/20' : 'text-gray-300 hover:text-white hover:bg-white/10'
-                      }`}
-                      style={{ fontSize: 'clamp(0.625rem, 1.2vw, 0.75rem)' }}
+                      } cb-rate-item`}
                     >
                       {rate === 1 ? '1.0x' : `${rate}x`}
                     </div>
@@ -454,9 +459,9 @@ const ControlBar: React.FC<ControlBarProps> = ({
               )}
             </div>
           )}
-          <div className="flex items-center" style={{ gap: 'clamp(2px, 0.5vw, 4px)' }}>
-            <div className="text-gray-300 cursor-pointer hover:text-white transition-colors" style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} onClick={handleMuteToggle} title={isMuted ? '取消静音' : '静音'}>
-              <svg style={{ width: '100%', height: '100%' }} fill="currentColor" viewBox="0 0 20 20">
+          <div className="flex items-center cb-gap-sm">
+            <div className="text-gray-300 cursor-pointer hover:text-white transition-colors cb-icon" onClick={handleMuteToggle} title={isMuted ? '取消静音' : '静音'}>
+              <svg className="cb-svg-full" fill="currentColor" viewBox="0 0 20 20">
                 {isMuted ? (
                   <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM12.293 7.293a1 1 0 011.414 0L15 8.586l1.293-1.293a1 1 0 011.414 1.414L16.414 10l1.293 1.293a1 1 0 01-1.414 1.414L15 11.414l-1.293 1.293a1 1 0 01-1.414-1.414L13.586 10l-1.293-1.293a1 1 0 010-1.414z" clipRule="evenodd" />
                 ) : (
@@ -464,18 +469,13 @@ const ControlBar: React.FC<ControlBarProps> = ({
                 )}
               </svg>
             </div>
-            <div className="relative flex items-center" style={{ height: 'clamp(12px, 2vw, 16px)' }}>
-              <div className="bg-gray-500/30 absolute top-1/2 transform -translate-y-1/2" style={{ width: 'clamp(40px, 8vw, 64px)', height: '1px' }}></div>
+            <div className="relative flex items-center cb-vol-wrap">
+              <div className="bg-gray-500/30 absolute top-1/2 transform -translate-y-1/2 cb-vol-bg"></div>
               <input
                 type="range"
-                className="appearance-none cursor-pointer bg-transparent relative z-10 volume-slider"
-                style={{
-                  width: 'clamp(40px, 8vw, 64px)',
-                  height: '4px',
-                  background: 'transparent',
-                  outline: 'none',
-                  '--volume-progress': `${volume}%`,
-                } as React.CSSProperties}
+                className="appearance-none cursor-pointer bg-transparent relative z-10 volume-slider cb-vol-slider"
+                title="音量控制"
+                style={{ '--volume-progress': `${volume}%` } as React.CSSProperties}
                 min="0"
                 max="100"
                 value={volume}
@@ -485,21 +485,16 @@ const ControlBar: React.FC<ControlBarProps> = ({
           </div>
 
           <div className="relative" ref={playlistRef}>
-            <button onClick={handlePlaylistButtonClick} className="hover:bg-white/20 rounded transition-colors" style={{ padding: 'clamp(4px, 1vw, 8px)' }} title="播放列表">
-              <svg style={{ width: 'clamp(12px, 2vw, 16px)', height: 'clamp(12px, 2vw, 16px)' }} fill="currentColor" viewBox="0 0 20 20">
+            <button onClick={handlePlaylistButtonClick} className="hover:bg-white/20 rounded transition-colors cb-btn" title="播放列表">
+              <svg className="cb-icon" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M2 4.75A.75.75 0 012.75 4h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 4.75zm0 5A.75.75 0 012.75 9h14.5a.75.75 0 010 1.5H2.75A.75.75 0 012 9.75zM2 14.75a.75.75 0 01.75-.75h14.5a.75.75 0 010 1.5H2.75a.75.75 0 01-.75-.75z" clipRule="evenodd" />
               </svg>
             </button>
 
             {showPlaylist && (
               <div
-                className="absolute bottom-full right-0 mb-2 bg-gray-900 border border-gray-700/50 shadow-xl rounded-md overflow-y-auto z-50"
-                style={{
-                  minWidth: '256px',
-                  maxWidth: '38vw',
-                  maxHeight: `${windowHeight * 0.8}px`,
-                  width: 'clamp(256px, 38vw, 600px)',
-                }}
+                className="absolute bottom-full right-0 mb-2 bg-gray-900 border border-gray-700/50 shadow-xl rounded-md overflow-y-auto z-50 cb-playlist-panel"
+                style={{ maxHeight: `${windowHeight * 0.8}px` }}
               >
                 <div className="p-2 border-b border-gray-700/50 flex items-center justify-between">
                   <div className="text-sm font-semibold">播放列表 ({filteredPlaylist.length})</div>

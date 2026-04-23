@@ -156,6 +156,102 @@ input[type="range"]::-moz-range-thumb {
   transform: scale(0.95);
 }
 
+/* ControlBar 控制栏样式 —— 替代内联样式 */
+.cb-wrap {
+  height: 60px;
+}
+
+.cb-progress-row {
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+
+.cb-progress-inner {
+  align-items: center;
+  justify-content: center;
+}
+
+.cb-progress-input {
+  background: transparent;
+  outline: none;
+}
+
+.cb-controls-row {
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.cb-gap-sm {
+  gap: clamp(2px, 0.5vw, 4px);
+}
+
+.cb-gap-md {
+  gap: clamp(4px, 1vw, 8px);
+}
+
+.cb-btn {
+  padding: clamp(4px, 1vw, 8px);
+}
+
+.cb-icon {
+  width: clamp(12px, 2vw, 16px);
+  height: clamp(12px, 2vw, 16px);
+}
+
+.cb-filename-wrap {
+  margin: clamp(8px, 2vw, 16px);
+}
+
+.cb-filename {
+  font-size: clamp(0.75rem, 1.5vw, 0.875rem);
+  max-width: clamp(150px, 30vw, 300px);
+}
+
+.cb-rate-btn {
+  font-size: clamp(0.625rem, 1.2vw, 0.75rem);
+  min-width: clamp(28px, 4vw, 36px);
+  text-align: center;
+}
+
+.cb-rate-menu {
+  min-width: 60px;
+}
+
+.cb-rate-item {
+  font-size: clamp(0.625rem, 1.2vw, 0.75rem);
+}
+
+.cb-svg-full {
+  width: 100%;
+  height: 100%;
+}
+
+.cb-vol-wrap {
+  height: clamp(12px, 2vw, 16px);
+}
+
+.cb-vol-bg {
+  width: clamp(40px, 8vw, 64px);
+  height: 1px;
+}
+
+.cb-vol-slider {
+  width: clamp(40px, 8vw, 64px);
+  height: 4px;
+  background: transparent;
+  outline: none;
+}
+
+.cb-playlist-panel {
+  min-width: 256px;
+  max-width: 38vw;
+  width: clamp(256px, 38vw, 600px);
+}
+
 /* 菜单动画 */
 .menu-dropdown {
   animation: slideDown 0.2s ease-out;

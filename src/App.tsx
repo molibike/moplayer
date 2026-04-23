@@ -562,6 +562,12 @@ function App() {
       setCurrentOnlineTrackId('');
       // 先记录最近选择的文件，避免初次渲染时索引未更新导致的类型判定失败
       lastSelectedFileRef.current = file;
+      // 根据文件类型自动切换播放列表视图模式，确保视频模式下倍速按钮立即显示
+      if (isVideoFile(file)) {
+        setPlaylistViewMode('video');
+      } else if (isAudioFile(file)) {
+        setPlaylistViewMode('audio');
+      }
       const url = URL.createObjectURL(file);
       setVideoSrc(url);
       const originalPath = getFilePath(file);
@@ -658,6 +664,13 @@ function App() {
         const newPlaylist = [...playlist, newItem];
         setPlaylist(newPlaylist);
         
+        // 根据文件类型切换视图模式
+        if (isVideoFile(file)) {
+          setPlaylistViewMode('video');
+        } else if (isAudioFile(file)) {
+          setPlaylistViewMode('audio');
+        }
+        
         // 立即播放新添加的文件
         setVideoSrc(url);
         setCurrentPlaylistIndex(newPlaylist.length - 1);
@@ -675,6 +688,8 @@ function App() {
       setCurrentOnlineTrackId(isOnlinePlaylistItem(item) ? getOnlineTrackKeyFromPlaylistItem(item) : '');
       if (isAudioFile(item.file)) {
         setPlaylistViewMode('audio');
+      } else if (isVideoFile(item.file)) {
+        setPlaylistViewMode('video');
       }
       setVideoSrc(item.url);
       setCurrentPlaylistIndex(index);
