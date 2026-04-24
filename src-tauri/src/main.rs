@@ -1654,7 +1654,9 @@ async fn check_latest_version() -> Result<ReleaseInfo, String> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| "未找到 assets".to_string())?;
 
-    let mut windows_url = String::new();
+    let mut windows_exe_url = String::new();
+    let mut windows_msi_url = String::new();
+    let mut windows_fallback_url = String::new();
     let mut macos_url = String::new();
     let mut linux_url = String::new();
 
@@ -1666,8 +1668,13 @@ async fn check_latest_version() -> Result<ReleaseInfo, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            if lower.ends_with(".exe") || lower.ends_with(".msi") || lower.contains("windows") {
-                windows_url = download_url.to_string();
+            // Windows: 优先选择 EXE，其次是 MSI，最后是其他包含 windows 关键字的文件
+            if lower.ends_with(".exe") {
+                windows_exe_url = download_url.to_string();
+            } else if lower.ends_with(".msi") {
+                windows_msi_url = download_url.to_string();
+            } else if lower.contains("windows") {
+                windows_fallback_url = download_url.to_string();
             } else if lower.ends_with(".dmg") || lower.contains("macos") || lower.contains("darwin") {
                 macos_url = download_url.to_string();
             } else if lower.ends_with(".appimage") || lower.ends_with(".deb") || lower.contains("linux") {
@@ -1675,6 +1682,15 @@ async fn check_latest_version() -> Result<ReleaseInfo, String> {
             }
         }
     }
+
+    // 优先顺序: EXE > MSI > fallback
+    let windows_url = if !windows_exe_url.is_empty() {
+        windows_exe_url
+    } else if !windows_msi_url.is_empty() {
+        windows_msi_url
+    } else {
+        windows_fallback_url
+    };
     
     // 获取发布说明
     let release_notes = release.get("body")
