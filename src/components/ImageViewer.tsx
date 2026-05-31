@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
-import { getCurrentWindow, LogicalSize, LogicalPosition } from '@tauri-apps/api/window';
+import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from '@tauri-apps/api/window';
 import { readFile } from '@tauri-apps/plugin-fs';
 import * as exifr from 'exifr';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/build/pdf';
@@ -565,10 +565,11 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
 
     try {
+      const scaleFactor = await windowRef.current.scaleFactor();
       const size = await windowRef.current.innerSize();
       const normalized = {
-        width: Math.round(size.width),
-        height: Math.round(size.height)
+        width: Math.round(size.width / scaleFactor),
+        height: Math.round(size.height / scaleFactor)
       };
       windowSizeRef.current = normalized;
       console.log('记录窗口尺寸:', normalized);
@@ -993,11 +994,27 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
     }
 
     try {
+      const scaleFactor = await currentWindow.scaleFactor();
+
       // 计算新的窗口尺寸
       const info = imageInfoRef.current;
       if (!info) return;
 
-      const { width: screenWidth, height: screenHeight } = screenSize;
+      let monitorPhysicalWidth = screenSize.width;
+      let monitorPhysicalHeight = screenSize.height;
+      let monitorScaleFactor = scaleFactor;
+      try {
+        const monitor = await currentMonitor();
+        if (monitor) {
+          monitorPhysicalWidth = monitor.size.width;
+          monitorPhysicalHeight = monitor.size.height;
+          monitorScaleFactor = monitor.scaleFactor;
+        }
+      } catch {
+      }
+
+      const screenWidth = monitorPhysicalWidth / monitorScaleFactor;
+      const screenHeight = monitorPhysicalHeight / monitorScaleFactor;
       const aspectRatio = info.naturalWidth / info.naturalHeight;
 
       let finalWidth = Math.round(info.naturalWidth * newScale);
@@ -1032,13 +1049,13 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       }
 
       // 计算并保持窗口中心绝对坐标不变（避免看起来以左上角为基准缩放）
-      let centerX: number | null = null;
-      let centerY: number | null = null;
+      let centerXPhysical: number | null = null;
+      let centerYPhysical: number | null = null;
       try {
         const oldPos = await currentWindow.outerPosition();
-        const oldSize = await currentWindow.innerSize();
-        centerX = Math.round(oldPos.x + oldSize.width / 2);
-        centerY = Math.round(oldPos.y + oldSize.height / 2);
+        const oldSize = await currentWindow.outerSize();
+        centerXPhysical = Math.round(oldPos.x + oldSize.width / 2);
+        centerYPhysical = Math.round(oldPos.y + oldSize.height / 2);
       } catch (posErr) {
         console.warn('获取窗口位置/尺寸失败，中心保持可能不生效:', posErr);
       }
@@ -1050,6 +1067,8 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       });
 
       const normalizedSize = { width: finalWidth, height: finalHeight };
+      const finalWidthPhysical = Math.round(finalWidth * scaleFactor);
+      const finalHeightPhysical = Math.round(finalHeight * scaleFactor);
 
       try {
         await currentWindow.setSize(new LogicalSize(finalWidth, finalHeight));
@@ -1058,19 +1077,20 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
       } catch (apiError) {
         console.warn('窗口API调整失败，尝试invoke回退:', apiError);
         await invoke('set_window_size', {
-          width: finalWidth,
-          height: finalHeight
+          width: finalWidthPhysical,
+          height: finalHeightPhysical
         });
         windowSizeRef.current = normalizedSize;
         console.log('窗口尺寸调整成功（invoke 回退）');
       }
 
       // 根据新尺寸回设窗口位置以保持中心不变
-      if (centerX !== null && centerY !== null) {
-        const newLeft = Math.round(centerX - finalWidth / 2);
-        const newTop = Math.round(centerY - finalHeight / 2);
+      if (centerXPhysical !== null && centerYPhysical !== null) {
         try {
-          await currentWindow.setPosition(new LogicalPosition(newLeft, newTop));
+          const newOuterSize = await currentWindow.outerSize();
+          const newLeft = Math.round(centerXPhysical - newOuterSize.width / 2);
+          const newTop = Math.round(centerYPhysical - newOuterSize.height / 2);
+          await currentWindow.setPosition(new PhysicalPosition(newLeft, newTop));
           console.log('窗口位置已调整以保持中心不变');
         } catch (posSetErr) {
           console.warn('设置窗口位置失败:', posSetErr);
@@ -1538,14 +1558,15 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
 
     if (willLock) {
       if (currentWindow) {
+        const scaleFactor = await currentWindow.scaleFactor().catch(() => 1);
         const size = await currentWindow.innerSize().catch(error => {
           console.error('锁定窗口时获取尺寸失败:', error);
           return null;
         });
         if (size) {
           const normalized = {
-            width: Math.round(size.width),
-            height: Math.round(size.height)
+            width: Math.round(size.width / scaleFactor),
+            height: Math.round(size.height / scaleFactor)
           };
           lockedWindowSizeRef.current = normalized;
           windowSizeRef.current = normalized;

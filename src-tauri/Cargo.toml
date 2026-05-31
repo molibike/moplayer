@@ -1,6 +1,6 @@
 [package]
 name = "moplayer"
-version = "0.77.0"
+version = "0.79.0"
 description = "高性能音视频播放器"
 authors = ["MoPlayer Team"]
 edition = "2021"
@@ -44,4 +44,3 @@ imagepipe = "0.5"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
-
